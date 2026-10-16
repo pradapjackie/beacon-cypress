@@ -1,0 +1,10 @@
+node_modules
+dist
+beacon-report
+.beacon-history
+cypress/screenshots
+cypress/videos
+examples/cypress/screenshots
+examples/cypress/videos
+*.tgz
+.DS_Store

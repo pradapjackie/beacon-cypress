@@ -1,0 +1,61 @@
+{
+  "name": "beacon-cypress",
+  "version": "0.1.0",
+  "description": "Beacon HTML reports for Cypress. Same dashboard as beacon-reporter, fed by Cypress runs.",
+  "keywords": ["cypress", "reporter", "html", "beacon", "playwright"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pradapjackie/beacon-cypress.git"
+  },
+  "homepage": "https://github.com/pradapjackie/beacon-cypress#readme",
+  "bugs": {
+    "url": "https://github.com/pradapjackie/beacon-cypress/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": {
+    "name": "Pradap Pandiyan",
+    "email": "pradapjackie@gmail.com",
+    "url": "https://www.pradappandiyan.com"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.js"
+    },
+    "./support": {
+      "types": "./dist/support.d.ts",
+      "require": "./dist/support.cjs",
+      "import": "./dist/support.js"
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "beacon-reporter": "^0.1.2"
+  },
+  "peerDependencies": {
+    "cypress": ">=13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

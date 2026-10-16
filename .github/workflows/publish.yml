@@ -1,0 +1,61 @@
+name: Publish
+
+# Push a tag that matches package.json, for example v0.1.0.
+# npm auth is OIDC (trusted publishing). On the package, add a trusted publisher:
+#   user pradapjackie, repo beacon-cypress, workflow filename publish.yml,
+#   allow npm publish. No NPM_TOKEN secret is used.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install an npm CLI that supports trusted publishing
+        run: npm install -g npm@11
+
+      - name: Require the tag to match the package version
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match beacon-cypress@${pkg}"
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Require the built package
+        run: |
+          test -f dist/index.js
+          test -f dist/index.cjs
+          test -f dist/support.js
+          test -f dist/support.cjs
+
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "beacon-cypress ${GITHUB_REF_NAME#v}" \
+            --generate-notes

@@ -1,0 +1,12 @@
+{
+  "name": "beacon-cypress-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "cypress run --browser electron"
+  },
+  "dependencies": {
+    "beacon-cypress": "file:..",
+    "cypress": "15.10.0"
+  }
+}
