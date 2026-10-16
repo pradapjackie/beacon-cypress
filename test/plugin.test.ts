@@ -44,6 +44,16 @@ describe('storeCommands', () => {
     ]);
   });
 
+  it('fills earlier attempts instead of leaving a hole', () => {
+    const commands = new Map();
+    storeCommands(commands, {
+      key: 'spec::title',
+      attempt: 1,
+      commands: [{ name: 'get', message: '#coupon', state: 'passed' }],
+    });
+    expect(commands.get('spec::title')).toEqual([[], [{ name: 'get', message: '#coupon', state: 'passed' }]]);
+  });
+
   it('runs a later after:run handler and sets the collector flag', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'beacon-cypress-'));
     let registered: ((results: unknown) => Promise<void> | void) | undefined;

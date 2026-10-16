@@ -24,12 +24,13 @@ export function compileScrub(scrub: unknown): {
       continue;
     }
     const entry = rule as ScrubRule;
+    const flags = withGlobal(entry.flags);
     try {
       compiled.push({
-        re: new RegExp(entry.pattern, entry.flags ?? 'g'),
+        re: new RegExp(entry.pattern, flags),
         to: entry.replacement ?? '[redacted]',
       });
-      rules.push(entry);
+      rules.push({ ...entry, flags });
     } catch {
       console.warn(`[beacon] Invalid scrub pattern ignored: ${entry.pattern}`);
     }
@@ -38,4 +39,10 @@ export function compileScrub(scrub: unknown): {
     rules,
     apply: (text) => compiled.reduce((acc, rule) => acc.replace(rule.re, rule.to), text),
   };
+}
+
+/** `flags: 'i'` would otherwise stop after the first match. */
+function withGlobal(flags: string | undefined): string {
+  const base = flags ?? '';
+  return base.includes('g') ? base : `${base}g`;
 }

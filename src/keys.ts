@@ -10,3 +10,21 @@ export function duplicateIndex(seen: Map<string, number>, title: string[]): numb
   seen.set(base, index + 1);
   return index;
 }
+
+/**
+ * The duplicate counter moves only on the first try. Retries reuse that key,
+ * so attempt 2 is not stored as a different test named `#2`.
+ */
+export function keyForAttempt(
+  seen: Map<string, number>,
+  specRelative: string,
+  title: string[],
+  retry: number,
+): string {
+  const titles = title.filter(Boolean);
+  if (retry > 0) {
+    const issued = seen.get(titles.join(' > ')) ?? 1;
+    return commandKey(specRelative, titles, Math.max(0, issued - 1));
+  }
+  return commandKey(specRelative, titles, duplicateIndex(seen, titles));
+}

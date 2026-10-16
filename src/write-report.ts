@@ -1,8 +1,8 @@
-import { rm } from 'node:fs/promises';
+import { access, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { BeaconReporter, type BeaconReporterOptions } from 'beacon-reporter';
+import { BeaconReporter } from 'beacon-reporter';
 import { replayFixture } from 'beacon-reporter/replay';
-import { toBeaconFixture, type CommandLogMap } from './map-results';
+import { toBeaconFixture, type CommandLogMap, type RecordedScreenshots } from './map-results';
 import { compileScrub, type ScrubRule } from './scrub';
 import type { CypressCommandLineResults } from './types';
 
@@ -12,9 +12,9 @@ export interface BeaconCypressOptions {
   title?: string;
   /** `false` turns history off. Default keeps `.beacon-history` in the project. */
   history?: false | { dir?: string; retain?: number };
-  categories?: BeaconReporterOptions['categories'];
+  categories?: Array<{ name: string; messageRegex?: string; stackRegex?: string }>;
   /** `{ pattern, flags?, replacement? }[]`. An object is ignored instead of failing the report. */
-  scrub?: ScrubRule[] | BeaconReporterOptions['scrub'];
+  scrub?: ScrubRule[];
   environment?: Record<string, string>;
 }
 
@@ -23,6 +23,7 @@ export async function writeBeaconReport(
   commands: CommandLogMap,
   projectRoot: string,
   options: BeaconCypressOptions = {},
+  recordedShots?: RecordedScreenshots,
 ): Promise<{ outputDir: string; tests: number }> {
   const runs = results.runs ?? [];
   const tests =
@@ -30,7 +31,7 @@ export async function writeBeaconReport(
     (results.status === 'failed' ? 1 : 0);
   const outputDir = path.resolve(projectRoot, options.outputFolder ?? 'beacon-report');
   const scrub = compileScrub(options.scrub);
-  await rm(path.join(outputDir, 'attachments'), { recursive: true, force: true });
+  await clearPreviousAttachments(outputDir);
   const reporter = new BeaconReporter({
     outputFolder: outputDir,
     title: options.title ?? 'Cypress',
@@ -52,6 +53,20 @@ export async function writeBeaconReport(
     },
     embedSource: false,
   });
-  await replayFixture(reporter, toBeaconFixture(results, commands, scrub.apply), projectRoot);
+  await replayFixture(
+    reporter,
+    toBeaconFixture(results, commands, scrub.apply, recordedShots),
+    projectRoot,
+  );
   return { outputDir, tests };
+}
+
+/** Only a previous Beacon report owns `attachments/`. A plain folder with that name is left alone. */
+async function clearPreviousAttachments(outputDir: string): Promise<void> {
+  try {
+    await access(path.join(outputDir, 'data', 'manifest.js'));
+  } catch {
+    return;
+  }
+  await rm(path.join(outputDir, 'attachments'), { recursive: true, force: true });
 }

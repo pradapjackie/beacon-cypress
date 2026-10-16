@@ -1,4 +1,4 @@
-import type { RecordedFixture } from 'beacon-reporter/replay';
+import type { BeaconFixture, TestEnd } from './fixture';
 import { commandKey, duplicateIndex } from './keys';
 import type {
   CypressAttempt,
@@ -9,13 +9,13 @@ import type {
   CypressTestResult,
 } from './types';
 
-type FixtureEvent = RecordedFixture['events'][number];
-type TestEnd = Extract<FixtureEvent, { type: 'onTestEnd' }>;
-
 export { commandKey };
 
 /** One list per attempt, or a single list from older callers. */
 export type CommandLogMap = Map<string, CypressCommand[] | CypressCommand[][]>;
+
+/** Screenshots reported by the browser collector, keyed by test then attempt. */
+export type RecordedScreenshots = Map<string, Map<number, CypressScreenshot[]>>;
 
 const ILLEGAL_FILENAME = /[/?<>\\:*|"]/g;
 const CONTROL_CHARS = /[\u0000-\u001f\u0080-\u009f]/g;
@@ -29,9 +29,10 @@ export function toBeaconFixture(
   results: CypressCommandLineResults,
   commands: CommandLogMap,
   scrub: (text: string) => string = (text) => text,
-): RecordedFixture {
+  recordedShots?: RecordedScreenshots,
+): BeaconFixture {
   const projectName = results.browserName || 'cypress';
-  const events: RecordedFixture['events'] = [
+  const events: BeaconFixture['events'] = [
     {
       type: 'onBegin',
       config: {
@@ -48,10 +49,13 @@ export function toBeaconFixture(
       value: timeOf(run.stats?.startedAt) || timeOf(results.startedTestsAt) || Date.now(),
     };
     const seen = new Map<string, number>();
+    const shotIndex = indexScreenshots(run.screenshots ?? []);
     for (const test of run.tests ?? []) {
       tests += 1;
       const duplicate = duplicateIndex(seen, test.title);
-      events.push(...testEvents(run, test, projectName, commands, cursor, duplicate, scrub));
+      events.push(
+        ...testEvents(run, test, projectName, commands, cursor, duplicate, scrub, shotIndex, recordedShots),
+      );
     }
     if (run.error) {
       tests += 1;
@@ -85,10 +89,12 @@ function testEvents(
   cursor: { value: number },
   duplicate: number,
   scrub: (text: string) => string,
+  shotIndex: ShotIndex,
+  recordedShots?: RecordedScreenshots,
 ): TestEnd[] {
   const attempts = test.attempts?.length ? test.attempts : [fallbackAttempt(test)];
   const outcome = outcomeOf(test);
-  const shots = classifyScreenshots(test, run.screenshots ?? []);
+  const shots = classifyScreenshots(test, shotIndex);
   const logged = commandAttempts(commands, run.spec.relative, test.title, attempts.length, duplicate);
   const title = displayTitle(test.title, duplicate);
   const videoTarget = (run.tests ?? []).find((candidate) => !skippedState(finalState(candidate)));
@@ -100,6 +106,12 @@ function testEvents(
     for (const shot of shots.failures.get(index) ?? []) attachments.push(imageAttachment(shot));
     if (index === attempts.length - 1) {
       for (const shot of shots.manual) attachments.push(imageAttachment(shot));
+    }
+    const recorded =
+      recordedShots?.get(commandKey(run.spec.relative, test.title, duplicate))?.get(index) ?? [];
+    for (const shot of recorded) {
+      if (attachments.some((attachment) => attachment.path === shot.path)) continue;
+      attachments.push(imageAttachment(shot));
     }
     const showVideo = specFailed ? failed : test === videoTarget;
     if (run.video && index === attempts.length - 1 && showVideo) {
@@ -142,7 +154,9 @@ function testEvents(
                   error?.message ||
                     (index === attempts.length - 1 ? test.displayError : undefined) ||
                     commandError ||
-                    'failed',
+                    (index === attempts.length - 1
+                      ? 'failed'
+                      : 'failed (details only recorded for the final attempt)'),
                 ),
                 stack: error?.stack ? scrub(error.stack) : undefined,
                 snippet: error?.codeFrame?.frame ? scrub(error.codeFrame.frame) : undefined,
@@ -312,37 +326,63 @@ function commandAttempts(
 ): CypressCommand[][] {
   const stored = commands.get(commandKey(specRelative, title, duplicate));
   if (!stored || stored.length === 0) return [];
-  if (Array.isArray(stored[0])) return stored as CypressCommand[][];
-  const flat = stored as CypressCommand[];
+  if (isAttemptList(stored)) return normalizeAttempts(stored);
+  const flat = (stored as CypressCommand[]).filter(isCommand);
   if (attemptCount <= 1) return [flat];
   const padded = Array.from({ length: attemptCount }, () => [] as CypressCommand[]);
   padded[attemptCount - 1] = flat;
   return padded;
 }
 
+/** A nested list, including a sparse one whose first slot is empty. */
+export function isAttemptList(stored: CypressCommand[] | CypressCommand[][]): stored is CypressCommand[][] {
+  for (let index = 0; index < stored.length; index += 1) {
+    if (Array.isArray(stored[index])) return true;
+  }
+  return false;
+}
+
+export function normalizeAttempts(stored: CypressCommand[] | CypressCommand[][]): CypressCommand[][] {
+  const attempts: CypressCommand[][] = [];
+  for (let index = 0; index < stored.length; index += 1) {
+    const entry = stored[index];
+    attempts[index] = Array.isArray(entry) ? entry.filter(isCommand) : [];
+  }
+  return attempts;
+}
+
+function isCommand(value: unknown): value is CypressCommand {
+  return Boolean(value) && typeof value === 'object' && typeof (value as CypressCommand).name === 'string';
+}
+
 const MAX_STEP_CHARS = 4_000;
 
 function stepsFrom(commands: CypressCommand[], scrub: (text: string) => string): TestEnd['result']['steps'] {
-  return commands.map((command, index) => {
-    const next = commands[index + 1]?.startedAt;
+  const steps: TestEnd['result']['steps'] = [];
+  for (let index = 0; index < commands.length; index += 1) {
+    const command = commands[index];
+    if (!isCommand(command)) continue;
+    const next = commands.slice(index + 1).find(isCommand)?.startedAt;
     const duration =
       command.startedAt != null && next != null && next >= command.startedAt ? next - command.startedAt : 0;
     const raw = command.message ? `${command.name} ${command.message}` : command.name;
     const title = clip(scrub(raw));
-    return {
+    steps.push({
       title,
       category: 'test.step',
       startTime: command.startedAt ?? index,
       duration,
       steps: [],
       ...(command.state === 'failed' ? { error: { message: title } } : {}),
-    };
-  });
+    });
+  }
+  return steps;
 }
 
 function clip(value: string): string {
-  if (value.length <= MAX_STEP_CHARS) return value;
-  return `${value.slice(0, MAX_STEP_CHARS)}…`;
+  const text = typeof value === 'string' ? value : '';
+  if (text.length <= MAX_STEP_CHARS) return text;
+  return `${text.slice(0, MAX_STEP_CHARS)}…`;
 }
 
 function imageAttachment(shot: CypressScreenshot): { name: string; contentType: string; path: string } {
@@ -353,6 +393,44 @@ function imageAttachment(shot: CypressScreenshot): { name: string; contentType: 
   };
 }
 
+interface ShotIndex {
+  /** Sanitized title segment → screenshots that contain it. */
+  byLeaf: Map<string, CypressScreenshot[]>;
+  /** Names long enough that Cypress may have truncated them. */
+  long: CypressScreenshot[];
+}
+
+function indexScreenshots(shots: CypressScreenshot[]): ShotIndex {
+  const byLeaf = new Map<string, CypressScreenshot[]>();
+  const long: CypressScreenshot[] = [];
+  for (const shot of shots) {
+    const base = shotBase(shot);
+    if (Buffer.byteLength(base) >= 240) long.push(shot);
+    const keys = new Set<string>();
+    for (const part of shotParts(shot)) {
+      const failed = part.match(/^(.*) \(failed\)(?: \(attempt (\d+)\))?$/);
+      const leaf = sanitizeTitle(failed?.[1] ?? part);
+      if (leaf) keys.add(leaf);
+    }
+    for (const key of keys) {
+      const list = byLeaf.get(key) ?? [];
+      list.push(shot);
+      byLeaf.set(key, list);
+    }
+  }
+  return { byLeaf, long };
+}
+
+function candidatesFor(test: CypressTestResult, index: ShotIndex): CypressScreenshot[] {
+  const titles = test.title.filter(Boolean);
+  const leaf = sanitizeTitle(titles.at(-1) ?? '');
+  const direct = leaf ? (index.byLeaf.get(leaf) ?? []) : [];
+  const body = titles.map((title) => sanitizeTitle(title)).join(' -- ');
+  if (Buffer.byteLength(body) < 200 || index.long.length === 0) return direct;
+  const seen = new Set(direct);
+  return [...direct, ...index.long.filter((shot) => !seen.has(shot))];
+}
+
 /**
  * Cypress names failures `<titles joined by " -- "> (failed).png`, and retries
  * `<titles> (failed) (attempt N).png` with N starting at 2. Characters that
@@ -361,13 +439,13 @@ function imageAttachment(shot: CypressScreenshot): { name: string; contentType: 
  */
 function classifyScreenshots(
   test: CypressTestResult,
-  shots: CypressScreenshot[],
+  index: ShotIndex,
 ): { failures: Map<number, CypressScreenshot[]>; manual: CypressScreenshot[] } {
   const failures = new Map<number, CypressScreenshot[]>();
   const manual: CypressScreenshot[] = [];
   const titles = test.title.filter(Boolean);
   if (titles.length === 0) return { failures, manual };
-  for (const shot of shots) {
+  for (const shot of candidatesFor(test, index)) {
     const parts = shotParts(shot);
     const located = locateTitle(parts, titles) ?? truncatedAttempt(shotBase(shot), titles);
     if (!located) continue;

@@ -3,7 +3,7 @@
  * It has no Node dependencies, so Cypress can load it in the browser.
  */
 
-import { commandKey, duplicateIndex } from './keys';
+import { keyForAttempt } from './keys';
 
 interface CypressLog {
   id?: string;
@@ -30,6 +30,11 @@ declare const Cypress: {
   currentRetry: number;
   env(key: string): unknown;
   on(event: 'log:added' | 'log:changed', fn: (log: CypressLog) => void): void;
+  Screenshot?: {
+    defaults(options: {
+      onAfterScreenshot?: (el: unknown, props: { path?: string; name?: string }) => void;
+    }): void;
+  };
 };
 
 declare function afterEach(fn: (this: { currentTest?: { titlePath: () => string[] } }) => unknown): void;
@@ -67,6 +72,7 @@ export function installBeaconCollector(): void {
   if (!collectorEnabled(flag)) return;
 
   const buffer: BufferedCommand[] = [];
+  const shots: Array<{ path: string; name?: string }> = [];
   /** Ids already sent. Cypress re-emits log:changed after the test ends. */
   const reported = new Set<string>();
   const seen = new Map<string, number>();
@@ -90,10 +96,16 @@ export function installBeaconCollector(): void {
 
   Cypress.on('log:added', remember);
   Cypress.on('log:changed', remember);
+  Cypress.Screenshot?.defaults({
+    onAfterScreenshot(_el, props) {
+      if (props?.path) shots.push({ path: props.path, name: props.name });
+    },
+  });
 
   const send = (key: string, attempt: number, append: boolean) => {
     const snapshot = buffer.splice(0, buffer.length);
-    if (snapshot.length === 0 && append) return;
+    const screenshots = shots.splice(0, shots.length);
+    if (snapshot.length === 0 && screenshots.length === 0 && append) return;
     for (const command of snapshot) reported.add(command.id);
     const commands = snapshot.map(({ name, message, state, startedAt }) => ({
       name,
@@ -101,14 +113,18 @@ export function installBeaconCollector(): void {
       state,
       startedAt,
     }));
-    return cy.task('beacon:commands', { key, attempt, append, commands }, { log: false });
+    return cy.task(
+      'beacon:commands',
+      { key, attempt, append, commands, screenshots },
+      { log: false },
+    );
   };
 
   afterEach(function sendCommands() {
-    const titles = this.currentTest?.titlePath?.() ?? [];
-    const duplicate = duplicateIndex(seen, titles.filter(Boolean));
-    lastKey = commandKey(Cypress.spec.relative, titles.filter(Boolean), duplicate);
-    lastAttempt = Cypress.currentRetry ?? 0;
+    const titles = (this.currentTest?.titlePath?.() ?? []).filter(Boolean);
+    const retry = Cypress.currentRetry ?? 0;
+    lastKey = keyForAttempt(seen, Cypress.spec.relative, titles, retry);
+    lastAttempt = retry;
     return send(lastKey, lastAttempt, false);
   });
 

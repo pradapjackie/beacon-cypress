@@ -64,4 +64,6 @@ export interface CommandLog {
   /** After-hook commands are added to the attempt instead of replacing it. */
   append?: boolean;
   commands: CypressCommand[];
+  /** Screenshots taken during this attempt, including named `cy.screenshot()` calls. */
+  screenshots?: CypressScreenshot[];
 }

@@ -1,6 +1,7 @@
 import { writeBeaconReport, type BeaconCypressOptions } from './write-report';
-import type { CommandLogMap } from './map-results';
-import type { CommandLog, CypressCommand, CypressCommandLineResults } from './types';
+import type { CommandLogMap, RecordedScreenshots } from './map-results';
+import { isAttemptList, normalizeAttempts } from './map-results';
+import type { CommandLog, CypressCommandLineResults, CypressScreenshot } from './types';
 
 /**
  * `any` is required so this is assignable to Cypress's `setupNodeEvents`.
@@ -15,14 +16,24 @@ type PluginConfig = {
 
 type AfterRun = (results: CypressCommandLineResults) => unknown;
 
-export function storeCommands(commands: CommandLogMap, payload: CommandLog): null {
+export function storeCommands(
+  commands: CommandLogMap,
+  payload: CommandLog,
+  screenshots?: RecordedScreenshots,
+): null {
   const stored = commands.get(payload.key);
-  const attempts: CypressCommand[][] =
-    stored && Array.isArray(stored[0]) ? [...(stored as CypressCommand[][])] : [];
+  const attempts = stored && isAttemptList(stored) ? normalizeAttempts(stored) : [];
   const index = payload.attempt ?? attempts.length;
-  const next = payload.commands ?? [];
+  while (attempts.length <= index) attempts.push([]);
+  const next = (payload.commands ?? []).filter((command) => command && typeof command.name === 'string');
   attempts[index] = payload.append ? [...(attempts[index] ?? []), ...next] : next;
   commands.set(payload.key, attempts);
+  if (screenshots && payload.screenshots?.length) {
+    const byAttempt = screenshots.get(payload.key) ?? new Map<number, CypressScreenshot[]>();
+    const previous = byAttempt.get(index) ?? [];
+    byAttempt.set(index, payload.append ? [...previous, ...payload.screenshots] : payload.screenshots);
+    screenshots.set(payload.key, byAttempt);
+  }
   return null;
 }
 
@@ -60,14 +71,15 @@ function wire(
 ): void {
   config.env = { ...config.env, BEACON_COLLECTOR: true };
   const commands: CommandLogMap = new Map();
+  const screenshots: RecordedScreenshots = new Map();
   on('task', {
     'beacon:commands'(payload: CommandLog) {
-      return storeCommands(commands, payload);
+      return storeCommands(commands, payload, screenshots);
     },
   });
   on('after:run', async (results: CypressCommandLineResults) => {
     try {
-      const written = await writeBeaconReport(results, commands, config.projectRoot, options);
+      const written = await writeBeaconReport(results, commands, config.projectRoot, options, screenshots);
       console.log(`[beacon] Report written to ${written.outputDir} (${written.tests} tests)`);
       console.log(`[beacon] Open it with: npx beacon open ${written.outputDir}`);
     } catch (error) {
