@@ -3,6 +3,8 @@
  * It has no Node dependencies, so Cypress can load it in the browser.
  */
 
+import { commandKey, duplicateIndex } from './keys';
+
 interface CypressLog {
   id?: string;
   name?: string;
@@ -24,14 +26,24 @@ interface BufferedCommand {
 
 declare const Cypress: {
   spec: { relative: string };
+  /** Zero on the first try, then 1, 2, … for retries. */
+  currentRetry: number;
+  env(key: string): unknown;
   on(event: 'log:added' | 'log:changed', fn: (log: CypressLog) => void): void;
 };
 
 declare function afterEach(fn: (this: { currentTest?: { titlePath: () => string[] } }) => unknown): void;
+declare function after(fn: () => unknown): void;
 
 declare const cy: {
   task(name: string, arg: unknown, options?: { log?: boolean }): unknown;
 };
+
+const MAX_COMMAND_CHARS = 4_000;
+
+export function collectorEnabled(value: unknown): boolean {
+  return value === true || value === 'true';
+}
 
 export function commandFromLog(log: CypressLog, fallbackId: string): BufferedCommand | undefined {
   const instrument = readLog(log, 'instrument');
@@ -51,10 +63,16 @@ export function commandFromLog(log: CypressLog, fallbackId: string): BufferedCom
 }
 
 export function installBeaconCollector(): void {
+  const flag = typeof Cypress.env === 'function' ? Cypress.env('BEACON_COLLECTOR') : undefined;
+  if (!collectorEnabled(flag)) return;
+
   const buffer: BufferedCommand[] = [];
   /** Ids already sent. Cypress re-emits log:changed after the test ends. */
   const reported = new Set<string>();
+  const seen = new Map<string, number>();
   let seq = 0;
+  let lastKey = '';
+  let lastAttempt = 0;
 
   const remember = (log: CypressLog) => {
     const command = commandFromLog(log, `log-${seq}`);
@@ -73,10 +91,9 @@ export function installBeaconCollector(): void {
   Cypress.on('log:added', remember);
   Cypress.on('log:changed', remember);
 
-  afterEach(function sendCommands() {
-    const titles = this.currentTest?.titlePath?.() ?? [];
-    const key = `${Cypress.spec.relative}::${titles.filter(Boolean).join(' > ')}`;
+  const send = (key: string, attempt: number, append: boolean) => {
     const snapshot = buffer.splice(0, buffer.length);
+    if (snapshot.length === 0 && append) return;
     for (const command of snapshot) reported.add(command.id);
     const commands = snapshot.map(({ name, message, state, startedAt }) => ({
       name,
@@ -84,7 +101,22 @@ export function installBeaconCollector(): void {
       state,
       startedAt,
     }));
-    return cy.task('beacon:commands', { key, commands }, { log: false });
+    return cy.task('beacon:commands', { key, attempt, append, commands }, { log: false });
+  };
+
+  afterEach(function sendCommands() {
+    const titles = this.currentTest?.titlePath?.() ?? [];
+    const duplicate = duplicateIndex(seen, titles.filter(Boolean));
+    lastKey = commandKey(Cypress.spec.relative, titles.filter(Boolean), duplicate);
+    lastAttempt = Cypress.currentRetry ?? 0;
+    return send(lastKey, lastAttempt, false);
+  });
+
+  // `after` hooks run in reverse registration order, so this support-file
+  // hook runs after the spec's after() and can flush those commands.
+  after(() => {
+    if (!lastKey || buffer.length === 0) return;
+    return send(lastKey, lastAttempt, true);
   });
 }
 
@@ -94,7 +126,28 @@ function readLog(log: CypressLog, key: string): unknown {
 }
 
 function asText(value: unknown): string {
-  if (Array.isArray(value)) return value.map((part) => asText(part)).join(' ');
+  return clip(textOf(value));
+}
+
+function textOf(value: unknown): string {
+  if (Array.isArray(value)) return value.map((part) => textOf(part)).filter(Boolean).join(' ');
   if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    const record = value as { message?: unknown };
+    if (typeof record.message === 'string' || typeof record.message === 'number') return String(record.message);
+    try {
+      const json = JSON.stringify(value);
+      if (json && json !== '{}' && json !== '[]') return json;
+    } catch {
+      return '';
+    }
+    return '';
+  }
   return String(value);
+}
+
+function clip(value: string): string {
+  if (value.length <= MAX_COMMAND_CHARS) return value;
+  return `${value.slice(0, MAX_COMMAND_CHARS)}…`;
 }

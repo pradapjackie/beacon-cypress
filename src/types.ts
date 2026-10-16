@@ -15,6 +15,8 @@ export interface CypressCommandLineResults {
 
 export interface CypressSpecRun {
   spec: { name?: string; relative: string; absolute?: string };
+  /** Set when the spec crashed before any test, for example a syntax or import error. */
+  error?: string | null;
   video?: string | null;
   screenshots?: CypressScreenshot[];
   tests?: CypressTestResult[];
@@ -35,6 +37,8 @@ export interface CypressTestResult {
   duration?: number;
   displayError?: string | null;
   attempts?: CypressAttempt[];
+  /** @cypress/grep puts these on the test config. Cypress's public results omit them. */
+  tags?: string[];
 }
 
 export interface CypressAttempt {
@@ -55,5 +59,9 @@ export interface CypressCommand {
 export interface CommandLog {
   /** `${specRelative}::${title joined with ' > '}` */
   key: string;
+  /** Zero-based retry index. Each attempt keeps its own command list. */
+  attempt?: number;
+  /** After-hook commands are added to the attempt instead of replacing it. */
+  append?: boolean;
   commands: CypressCommand[];
 }

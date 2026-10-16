@@ -1,8 +1,14 @@
 {
   "name": "beacon-cypress",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Beacon HTML reports for Cypress. Same dashboard as beacon-reporter, fed by Cypress runs.",
-  "keywords": ["cypress", "reporter", "html", "beacon", "playwright"],
+  "keywords": [
+    "cypress",
+    "reporter",
+    "html",
+    "beacon",
+    "playwright"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -26,17 +32,30 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "require": "./dist/index.cjs",
-      "import": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./support": {
-      "types": "./dist/support.d.ts",
-      "require": "./dist/support.cjs",
-      "import": "./dist/support.js"
+      "import": {
+        "types": "./dist/support.d.ts",
+        "default": "./dist/support.js"
+      },
+      "require": {
+        "types": "./dist/support.d.cts",
+        "default": "./dist/support.cjs"
+      }
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "examples"
+  ],
   "engines": {
     "node": ">=20"
   },
