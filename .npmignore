@@ -1,0 +1,12 @@
+node_modules
+examples/node_modules
+beacon-report
+.beacon-history
+examples/beacon-report
+examples/.beacon-history
+cypress/screenshots
+cypress/videos
+examples/cypress/screenshots
+examples/cypress/videos
+*.tgz
+.DS_Store
