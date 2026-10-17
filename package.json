@@ -1,6 +1,6 @@
 {
   "name": "beacon-cypress",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Beacon HTML reports for Cypress.",
   "keywords": [
     "cypress",
@@ -67,7 +67,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "rm -rf dist && tsup && node scripts/copy-ui.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
@@ -80,5 +80,8 @@
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
     "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
   }
 }

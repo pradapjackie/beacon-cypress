@@ -1,6 +1,6 @@
 # beacon-cypress
 
-Beacon reports for Cypress. This package collects a Cypress run and writes its own HTML report: dashboard, test list, command log, screenshots, video, retries, and run history. It does not use Playwright or `beacon-reporter`.
+Beacon reports for Cypress. This package collects a Cypress run and writes the same Beacon report as beacon-reporter: dashboard, tests, compare, timeline, flaky scores, trends, media, requirements, and run history. It does not install Playwright.
 
 ## Setup
 
@@ -61,7 +61,7 @@ After `cypress run`, open the report:
 npx beacon-cypress open beacon-report
 ```
 
-The report is a single `index.html` plus an `attachments/` folder. `open` serves that folder on a local port.
+The report is the Beacon UI plus an `attachments/` folder. `open` serves that folder on a local port. The same folder also accepts `export`, `gate`, `summarize`, `convert`, `quarantine`, `diff`, `notify`, `archive`, and `history`.
 
 ## Options
 
@@ -75,5 +75,11 @@ The report is a single `index.html` plus an `attachments/` folder. `open` serves
 | `categories` | assertion and timeout | `{ name, messageRegex?, stackRegex? }[]` matched against errors. |
 | `scrub` | — | Array of `{ pattern, flags?, replacement? }`. Applied to errors, command steps, and text attachments. |
 | `environment` | browser, Cypress version, OS | Extra key-values on the environment card. |
+| `dashboard` | every card | `{ cards?, slowest? }`. `cards` is the dashboard order. |
+| `links` | — | URL templates per annotation type. `{}` is the description. |
+| `branding` | — | `{ logo?, accentColor? }`. Logo is svg, png, jpg, or webp, at most 64KB. |
+| `coverage` | — | Path to an istanbul `coverage-summary.json`. |
+| `editorLinks` | off | Record the project root so the report can open source files. |
+| `watch` | off | Rewrite the report after each spec while the run is still going. |
 
 An example spec is in [`examples/`](https://github.com/pradapjackie/beacon-cypress/tree/main/examples) on GitHub and in the `examples/` folder of the published package. `@cypress/grep` tags live on the test config, which Cypress does not include in `after:run`, so only tags written in the title (or a `tags` array on the test result) show on the report. Named `cy.screenshot('checkout-page')` images are recorded when the collector is on. A project's own `Cypress.Screenshot.defaults({ onAfterScreenshot })` still runs. `toCypressReport` builds the report data. The 0.1 name `toBeaconFixture` was removed in 0.2.0. See [CHANGELOG.md](./CHANGELOG.md). `scrub` flags always match every occurrence, so `flags: 'i'` still redacts the whole string.

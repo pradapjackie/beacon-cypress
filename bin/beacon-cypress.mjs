@@ -5,8 +5,16 @@ import path from 'node:path';
 
 const args = process.argv.slice(2);
 if (args[0] !== 'open') {
-  console.log('Usage: beacon-cypress open [report-directory] [--port 4173]');
-  process.exit(args.length ? 1 : 0);
+  try {
+    await import('../dist/cli.js');
+  } catch (error) {
+    console.error(
+      `beacon-cypress: ${args[0] ?? 'help'} needs a build of this package. Run npm run build in beacon-cypress and try again.`,
+    );
+    if (error instanceof Error && error.message) console.error(error.message);
+    process.exit(1);
+  }
+  process.exit(0);
 }
 
 let dir = 'beacon-report';
@@ -49,6 +57,8 @@ const types = {
   '.svg': 'image/svg+xml',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
 };
 
 function listen(nextPort) {

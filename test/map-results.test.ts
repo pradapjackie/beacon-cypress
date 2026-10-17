@@ -479,6 +479,10 @@ describe('toCypressReport', () => {
   });
 });
 
+function readChunk<T>(raw: string): T {
+  return JSON.parse(raw.slice(raw.indexOf(', ') + 2, raw.lastIndexOf(');'))) as T;
+}
+
 describe('writeBeaconReport', () => {
   it('writes a Beacon report a Cypress run can open', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'beacon-cypress-'));
@@ -493,29 +497,28 @@ describe('writeBeaconReport', () => {
     });
 
     expect(written.tests).toBe(2);
-    const report = JSON.parse(await readFile(path.join(written.outputDir, 'data', 'report.json'), 'utf8')) as {
-      title: string;
-      counts: { total: number; failed: number; flaky: number };
+    const manifest = readChunk<{
+      ui?: { title?: string; cards?: string[] };
+      counts: { total: number; unexpected: number; flaky: number };
       environment?: Record<string, string>;
-      tests: Array<{ title: string }>;
-    };
-    expect(report.counts).toMatchObject({ total: 2, failed: 1, flaky: 1 });
-    expect(report.title).toBe('Cypress demo');
-    expect(report.environment?.cypress).toBe('13.15.0');
-    expect(report.environment?.browser).toBe('chrome');
+    }>(await readFile(path.join(written.outputDir, 'data', 'manifest.js'), 'utf8'));
+    expect(manifest.counts).toMatchObject({ total: 2, unexpected: 1, flaky: 1 });
+    expect(manifest.ui?.title).toBe('Cypress demo');
+    expect(manifest.ui?.cards).toContain('outcomes');
+    expect(manifest.ui?.cards).toContain('incidents');
+    expect(manifest.ui?.cards).toContain('health');
+    expect(manifest.environment?.cypress).toBe('13.15.0');
+    expect(manifest.environment?.browser).toBe('chrome');
     const html = await readFile(path.join(written.outputDir, 'index.html'), 'utf8');
-    expect(html).toContain('--ground');
-    expect(html).toContain('Cypress demo');
-    expect(html).toContain('signs in');
-    expect(html).toContain('attachments/');
-    expect(html).not.toContain('playwright');
-    expect(html).not.toContain('beacon-reporter');
-    expect(html).not.toContain('fonts.googleapis');
     expect(html).toContain('beacon-cypress-report');
-    const saved = JSON.parse(await readFile(path.join(written.outputDir, 'data', 'report.json'), 'utf8')) as {
-      history: Array<{ at: string }>;
-    };
-    expect(saved.history).toEqual([]);
+    expect(html).toContain('Beacon Report');
+    expect(html).not.toContain('fonts.googleapis');
+    await expect(readFile(path.join(written.outputDir, 'data', 'history.js'), 'utf8')).rejects.toThrow();
+    const details = readChunk<Array<{ title: string; results: Array<{ attachments: unknown[] }> }>>(
+      await readFile(path.join(written.outputDir, 'data', 'details', 'chunk-0.js'), 'utf8'),
+    );
+    expect(details.some((test) => test.title === 'signs in')).toBe(true);
+    expect(details.some((test) => test.results.some((result) => result.attachments.length > 0))).toBe(true);
   });
 
   it('stamps history with the Cypress run start', async () => {
@@ -523,10 +526,10 @@ describe('writeBeaconReport', () => {
     const written = await writeBeaconReport(results(path.join(root, 'missing.png'), path.join(root, 'missing.mp4')), new Map(), root, {
       history: { dir: 'history' },
     });
-    const report = JSON.parse(await readFile(path.join(written.outputDir, 'data', 'report.json'), 'utf8')) as {
-      history: Array<{ at: string }>;
-    };
-    expect(report.history[0]?.at).toBe('2026-10-16T12:00:00.000Z');
+    const history = readChunk<{ runs: Array<{ startTime: number }> }>(
+      await readFile(path.join(written.outputDir, 'data', 'history.js'), 'utf8'),
+    );
+    expect(history.runs.at(-1)?.startTime).toBe(Date.parse('2026-10-16T12:00:00.000Z'));
   });
 
   it('still writes a report when scrub is not an array, and drops stale attachments', async () => {

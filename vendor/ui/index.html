@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!-- beacon-cypress-report -->
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Beacon Report</title>
+    <script>
+      // Apply the persisted theme before first paint to avoid a flash.
+      try {
+        const stored = localStorage.getItem('beacon-theme');
+        const dark = stored ? stored === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+        document.documentElement.classList.toggle('dark', dark);
+      } catch {}
+    </script>
+    <script type="module" crossorigin src="./assets/index-g6daEwIE.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-D239QvZb.css">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // Chromium blocks type=module (and crossorigin stylesheets) on file://,
+      // which leaves a blank page. This classic script still runs and explains
+      // how to open the report. It stays hidden once the module app mounts.
+      if (location.protocol === 'file:') {
+        document.addEventListener('DOMContentLoaded', function () {
+          var root = document.getElementById('root');
+          if (!root || root.childElementCount) return;
+          root.innerHTML =
+            '<div style="font:16px/1.5 system-ui,sans-serif;max-width:36rem;margin:4rem auto;padding:0 1.5rem;color:#101828">' +
+            '<h1 style="font-size:1.25rem;margin:0 0 .75rem">This report needs a local server in Chromium</h1>' +
+            '<p style="margin:0 0 .75rem">Chromium blocks the report scripts when the folder is opened from disk. From this folder run <code>npx beacon-cypress open</code>, or share one file with <code>npx beacon-cypress export</code>.</p>' +
+            '</div>';
+        });
+      }
+    </script>
+  </body>
+</html>

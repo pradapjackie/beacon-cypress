@@ -77,6 +77,26 @@ function wire(
       return storeCommands(commands, payload, screenshots);
     },
   });
+  if (options.watch) {
+    const partial: NonNullable<CypressCommandLineResults['runs']> = [];
+    on('after:spec', async (_spec: unknown, specResult: NonNullable<CypressCommandLineResults['runs']>[number]) => {
+      partial.push(specResult);
+      try {
+        await writeBeaconReport(
+          { status: 'finished', runs: [...partial] },
+          commands,
+          config.projectRoot,
+          options,
+          screenshots,
+          { inProgress: true },
+        );
+      } catch (error) {
+        console.warn(
+          `[beacon] Live report update failed: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    });
+  }
   on('after:run', async (results: CypressCommandLineResults) => {
     try {
       const written = await writeBeaconReport(results, commands, config.projectRoot, options, screenshots);

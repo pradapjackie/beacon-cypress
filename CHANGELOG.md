@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- A Cypress run writes the same Beacon report as beacon-reporter: dashboard cards, compare, timeline, flaky scores, trends, requirements, and the shared report commands.
+- `owner:`, `severity:`, `requirement:`, `budget:`, and `issue:` written in a title or tag become report annotations.
+- `watch: true` refreshes the report after each spec.
+
 ## 0.2.1
 
 - A project's `onAfterScreenshot` hook still runs when it is registered before `installBeaconCollector()`, and a hook registered after it no longer turns off named screenshots.
