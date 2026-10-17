@@ -81,7 +81,7 @@ function wire(
     try {
       const written = await writeBeaconReport(results, commands, config.projectRoot, options, screenshots);
       console.log(`[beacon] Report written to ${written.outputDir} (${written.tests} tests)`);
-      console.log(`[beacon] Open it with: npx beacon open ${written.outputDir}`);
+      console.log(`[beacon] Open it with: npx beacon-cypress open ${written.outputDir}`);
     } catch (error) {
       console.warn(
         `[beacon] Report failed (Cypress run is unchanged): ${error instanceof Error ? error.message : error}`,

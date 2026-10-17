@@ -1,0 +1,399 @@
+(function () {
+  var report = window.__REPORT__;
+  var state = { page: 'dashboard', query: '', outcome: 'all', spec: '', id: '', attempt: 0, zoom: '', help: false };
+
+  var LABELS = { passed: 'Passed', failed: 'Failed', flaky: 'Flaky', skipped: 'Skipped' };
+  var ORDER = ['passed', 'failed', 'skipped', 'flaky'];
+
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+
+  function duration(ms) {
+    ms = Math.max(0, Math.round(ms || 0));
+    if (ms < 1000) return ms + 'ms';
+    if (ms < 60000) return (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + 's';
+    var minutes = Math.floor(ms / 60000);
+    var seconds = Math.round((ms % 60000) / 1000);
+    return minutes + 'm ' + seconds + 's';
+  }
+
+  function when(ms) {
+    try {
+      return new Date(ms).toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function byId(id) {
+    for (var i = 0; i < report.tests.length; i += 1) {
+      if (report.tests[i].id === id) return report.tests[i];
+    }
+    return null;
+  }
+
+  function passRate(counts) {
+    if (!counts.total) return 100;
+    return Math.round(((counts.passed + counts.flaky) / counts.total) * 100);
+  }
+
+  function filtered() {
+    var query = state.query.trim().toLowerCase();
+    return report.tests.filter(function (test) {
+      if (state.outcome !== 'all' && test.outcome !== state.outcome) return false;
+      if (state.spec && test.spec !== state.spec) return false;
+      if (!query) return true;
+      var hay = (test.title + ' ' + test.spec + ' ' + test.tags.join(' ')).toLowerCase();
+      return hay.indexOf(query) !== -1;
+    });
+  }
+
+  function groups(pick) {
+    var map = {};
+    report.tests.forEach(function (test) {
+      var name = pick(test);
+      if (!name) return;
+      var row = map[name] || { name: name, total: 0, passed: 0, failed: 0, flaky: 0, skipped: 0, duration: 0 };
+      row.total += 1;
+      row[test.outcome] += 1;
+      row.duration += test.duration;
+      map[name] = row;
+    });
+    return Object.keys(map)
+      .map(function (key) { return map[key]; })
+      .sort(function (a, b) { return b.failed - a.failed || b.duration - a.duration; });
+  }
+
+  function bar(row) {
+    var parts = ORDER.filter(function (key) { return row[key] > 0; }).map(function (key) {
+      return '<i class="' + key + '" style="flex-grow:' + row[key] + '"></i>';
+    });
+    return '<div class="bar">' + parts.join('') + '</div>';
+  }
+
+  function groupRows(rows, clickSpec) {
+    if (!rows.length) return '<div class="empty">Nothing recorded.</div>';
+    return '<div class="row">' + rows.map(function (row) {
+      var label = clickSpec
+        ? '<a href="#/tests" data-spec="' + esc(row.name) + '">' + esc(row.name) + '</a>'
+        : '<span>' + esc(row.name) + '</span>';
+      var rate = row.total ? Math.round(((row.passed + row.flaky) / row.total) * 100) + '%' : '—';
+      return '<div><div class="row-head">' + label +
+        '<span class="muted">' + row.total + ' tests</span>' +
+        '<span class="faint">' + duration(row.duration) + '</span>' +
+        '<span class="metric">' + rate + '</span></div>' + bar(row) + '</div>';
+    }).join('') + '</div>';
+  }
+
+  function donut() {
+    var counts = report.counts;
+    var C = 2 * Math.PI * 70;
+    var start = 0;
+    var colors = { passed: 'var(--passed)', failed: 'var(--failed)', skipped: 'var(--skipped)', flaky: 'var(--flaky)' };
+    var circles = counts.total === 0
+      ? '<circle cx="93" cy="93" r="70" fill="none" stroke="var(--edge-2)" stroke-width="22"></circle>'
+      : ORDER.filter(function (key) { return counts[key] > 0; }).map(function (key) {
+          var len = (counts[key] / counts.total) * C;
+          var dash = Math.max(1, len - 3);
+          var node = '<circle cx="93" cy="93" r="70" fill="none" stroke="' + colors[key] + '" stroke-width="22" stroke-dasharray="' + dash + ' ' + C + '" stroke-dashoffset="' + (-start) + '"></circle>';
+          start += len;
+          return node;
+        }).join('');
+    return '<div class="donut"><svg width="186" height="186" viewBox="0 0 186 186" role="img" aria-label="Outcome donut">' +
+      '<g transform="rotate(-90 93 93)">' + circles + '</g></svg>' +
+      '<div class="donut-label"><strong>' + passRate(counts) + '%</strong><span>pass rate</span></div></div>';
+  }
+
+  function legend() {
+    return '<div class="legend">' + ORDER.map(function (key) {
+      return '<div class="legend-row"><span class="dot ' + key + '"></span><span>' + LABELS[key] + '</span><b>' + report.counts[key] + '</b></div>';
+    }).join('') + '</div>';
+  }
+
+  function card(title, sub, body, extra) {
+    return '<section class="card' + (extra ? ' ' + extra : '') + '"><h2>' + esc(title) + '</h2>' +
+      (sub ? '<div class="sub">' + sub + '</div>' : '') + body + '</section>';
+  }
+
+  function dashboard() {
+    var counts = report.counts;
+    var slowest = report.tests.slice().sort(function (a, b) { return b.duration - a.duration; }).slice(0, 8);
+    var buckets = [
+      ['<100ms', 0, 100],
+      ['100–300ms', 100, 300],
+      ['300ms–1s', 300, 1000],
+      ['1–3s', 1000, 3000],
+      ['3–10s', 3000, 10000],
+      ['10–30s', 10000, 30000],
+      ['>30s', 30000, Infinity],
+    ].map(function (bucket) {
+      return {
+        label: bucket[0],
+        count: report.tests.filter(function (test) { return test.duration >= bucket[1] && test.duration < bucket[2]; }).length,
+      };
+    });
+    var maxBucket = Math.max.apply(null, buckets.map(function (bucket) { return bucket.count; }).concat([1]));
+    var env = Object.keys(report.environment || {}).map(function (key) {
+      return '<div><dt>' + esc(key) + '</dt><dd>' + esc(report.environment[key]) + '</dd></div>';
+    }).join('');
+    var previous = (report.history || []).length > 1 ? report.history[report.history.length - 2] : null;
+    var changes = '';
+    if (previous) {
+      var prior = {};
+      previous.tests.forEach(function (test) { prior[test.id] = test; });
+      var rows = report.tests.filter(function (test) {
+        return prior[test.id] && prior[test.id].outcome !== test.outcome;
+      });
+      changes = card('Since last run', previous.at, rows.length
+        ? '<div class="changed">' + rows.slice(0, 8).map(function (test) {
+            return '<div><a href="#/tests/' + test.id + '">' + esc(test.title) + '</a> <span class="muted">' +
+              esc(prior[test.id].outcome) + ' → ' + esc(test.outcome) + '</span></div>';
+          }).join('') + '</div>'
+        : '<div class="empty">No test changed outcome.</div>');
+    }
+    return '<div class="tiles">' + ORDER.map(function (key) {
+      return '<section class="card tile"><div class="muted">' + LABELS[key] + '</div><strong class="t-' + key + '">' + counts[key] + '</strong></section>';
+    }).join('') + '</div>' +
+      '<div class="cards" style="margin-top:16px">' +
+      card('Outcomes', counts.total + ' tests · ' + duration(report.duration), '<div class="outcomes">' + donut() + legend() + '</div>', 'span-2') +
+      card('Slowest tests', 'this run', '<div class="row">' + slowest.map(function (test) {
+        return '<div class="row-head"><a class="grow" href="#/tests/' + test.id + '">' + esc(test.title) + '</a><span class="metric">' + duration(test.duration) + '</span></div>';
+      }).join('') + '</div>') +
+      card('Spec files', 'worst first', groupRows(groups(function (test) { return test.spec || 'Cypress run'; }), true)) +
+      card('Tags', '', groupRows(groups(function (test) { return test.tags[0] || ''; }), false)) +
+      card('Failure categories', '', groupRows(groups(function (test) { return test.category || ''; }), false)) +
+      card('Durations', '', '<div class="buckets">' + buckets.map(function (bucket) {
+        var height = Math.max(2, Math.round((bucket.count / maxBucket) * 88));
+        return '<div class="bucket"><b style="height:' + height + 'px" title="' + bucket.count + '"></b><span>' + esc(bucket.label) + '</span></div>';
+      }).join('') + '</div>') +
+      card('Environment', '', '<dl class="env">' + (env || '<div class="empty">No environment recorded.</div>') + '</dl>') +
+      changes +
+      '</div>';
+  }
+
+  function testList() {
+    var tests = filtered();
+    if (!byId(state.id)) state.id = tests[0] ? tests[0].id : '';
+    var chips = ['all'].concat(ORDER).map(function (key) {
+      var label = key === 'all' ? 'All ' + report.tests.length : LABELS[key];
+      return '<button type="button" class="chip' + (state.outcome === key ? ' active' : '') + '" data-outcome="' + key + '">' + label + '</button>';
+    }).join('');
+    var spec = state.spec ? '<button type="button" class="chip active" data-spec="">' + esc(state.spec) + ' ×</button>' : '';
+    var items = tests.length ? tests.map(function (test) {
+      return '<button type="button" class="test-link' + (test.id === state.id ? ' active' : '') + '" data-id="' + test.id + '">' +
+        '<span class="test-name">' + esc(test.title) + '</span>' +
+        '<span class="test-meta"><span class="dot ' + test.outcome + '"></span><span class="grow">' + esc(test.spec) + '</span><span>' + duration(test.duration) + '</span></span></button>';
+    }).join('') : '<div class="empty">No tests match.</div>';
+    return '<div class="tests"><section class="card" style="padding:12px"><input class="search" data-search placeholder="Search tests" value="' + esc(state.query) + '" />' +
+      '<div class="filters">' + chips + spec + '</div><div class="list">' + items + '</div></section>' +
+      '<section class="card">' + detail() + '</section></div>';
+  }
+
+  function detail() {
+    var test = byId(state.id) || filtered()[0];
+    if (!test) return '<div class="empty">Select a test.</div>';
+    if (state.attempt >= test.attempts.length) state.attempt = test.attempts.length - 1;
+    var attempt = test.attempts[state.attempt] || test.attempts[0];
+    var tabs = test.attempts.length > 1
+      ? '<div class="tabs">' + test.attempts.map(function (item, index) {
+          var label = index === 0 ? 'Attempt 1' : 'Retry ' + index;
+          return '<button type="button" class="tab' + (index === state.attempt ? ' active' : '') + '" data-attempt="' + index + '"><span class="dot ' + item.status + '"></span>' + label + ' · ' + item.status + '</button>';
+        }).join('') + '</div>'
+      : '';
+    var max = Math.max.apply(null, attempt.commands.map(function (command) { return command.duration; }).concat([1]));
+    var steps = attempt.commands.length
+      ? '<div class="card steps"><h2>Commands</h2><div class="sub">Cypress command log</div>' + attempt.commands.map(function (command) {
+          var width = Math.max(2, Math.round((command.duration / max) * 100));
+          return '<div class="step' + (command.state === 'failed' ? ' failed' : '') + '"><span class="dot ' + (command.state === 'failed' ? 'failed' : 'passed') + '"></span><span class="title">' + esc(command.title) + '</span><span class="faint">' + duration(command.duration) + '</span><span class="track"><i style="width:' + width + '%"></i></span></div>';
+        }).join('') + '</div>'
+      : '';
+    var error = attempt.error
+      ? '<div class="card"><h2 class="t-failed">Error</h2><div class="error-line">' + esc(attempt.error.message.split('\n')[0]) + '</div>' +
+        (attempt.error.frame || attempt.error.stack ? '<pre>' + esc(attempt.error.frame || attempt.error.stack) + '</pre>' : '') + '</div>'
+      : '';
+    var shots = attempt.screenshots.length
+      ? '<div class="card"><h2>Screenshots</h2><div class="shots">' + attempt.screenshots.map(function (shot) {
+          return '<img src="' + esc(shot.path) + '" alt="' + esc(shot.name) + '" data-zoom="' + esc(shot.path) + '" />';
+        }).join('') + '</div></div>'
+      : '';
+    var video = attempt.video
+      ? '<div class="card"><h2>Video</h2><video class="player" controls src="' + esc(attempt.video.path) + '"></video></div>'
+      : '';
+    var path = test.titlePath.length > 1 ? test.titlePath.slice(0, -1).join(' › ') : '';
+    return '<div class="detail-head"><span class="pill bg-' + test.outcome + '">' + LABELS[test.outcome] + '</span>' +
+      '<h2>' + esc(test.title) + '</h2>' + test.tags.map(function (tag) { return '<span class="tag">' + esc(tag) + '</span>'; }).join('') + '</div>' +
+      '<div class="sub">' + esc(test.spec) + (path ? ' · ' + esc(path) : '') + ' · ' + duration(test.duration) + '</div>' +
+      tabs + '<div class="split">' + steps + '<div class="stack">' + error + shots + video +
+      '<div class="faint">started ' + when(attempt.startTime) + ' · ' + duration(attempt.duration) + '</div></div></div>';
+  }
+
+  function media() {
+    var shots = [];
+    report.tests.forEach(function (test) {
+      test.attempts.forEach(function (attempt, index) {
+        attempt.screenshots.forEach(function (shot) {
+          shots.push({ shot: shot, test: test, index: index });
+        });
+      });
+    });
+    if (!shots.length) return '<section class="card"><h2>Media</h2><div class="empty">This run has no screenshots.</div></section>';
+    return '<section class="card"><h2>Media</h2><div class="sub">' + shots.length + ' screenshots</div><div class="gallery">' +
+      shots.map(function (item) {
+        return '<div class="shot-card"><img src="' + esc(item.shot.path) + '" alt="' + esc(item.shot.name) + '" data-zoom="' + esc(item.shot.path) + '" />' +
+          '<p><a href="#/tests/' + item.test.id + '">' + esc(item.test.title) + '</a>' +
+          (item.index ? ' · retry ' + item.index : '') + '</p></div>';
+      }).join('') + '</div></section>';
+  }
+
+  function flaky() {
+    var tests = report.tests.filter(function (test) { return test.outcome === 'flaky'; });
+    return card('Flaky tests', 'passed after a failed attempt', tests.length
+      ? '<div class="row">' + tests.map(function (test) {
+          return '<div class="row-head"><a class="grow" href="#/tests/' + test.id + '">' + esc(test.title) + '</a><span class="muted">' + esc(test.spec) + '</span><span class="metric">' + test.attempts.length + ' attempts</span></div>';
+        }).join('') + '</div>'
+      : '<div class="empty">No flaky tests in this run.</div>');
+  }
+
+  function trends() {
+    var history = report.history || [];
+    if (!history.length) return card('Trends', '', '<div class="empty">History is turned off for this report.</div>');
+    var first = history.length < 2;
+    var max = Math.max.apply(null, history.map(function (run) { return run.counts.failed + run.counts.flaky; }).concat([1]));
+    var bars = '<div class="buckets" style="height:160px">' + history.slice(-30).map(function (run) {
+      var value = run.counts.failed + run.counts.flaky;
+      var height = Math.max(2, Math.round((value / max) * 120));
+      return '<div class="bucket" title="' + esc(run.at) + '"><b class="' + (run.status === 'failed' ? 'failed' : 'passed') + '" style="height:' + height + 'px"></b><span>' + run.counts.failed + '</span></div>';
+    }).join('') + '</div>';
+    return card('Trends', history.length + ' recorded runs', '<div class="sub">' + (first ? 'This is the first recorded run. ' : '') + 'Failed tests per run. The latest run is on the right.</div>' + bars);
+  }
+
+  function pageBody() {
+    if (state.page === 'tests') return testList();
+    if (state.page === 'media') return media();
+    if (state.page === 'flaky') return flaky();
+    if (state.page === 'trends') return trends();
+    return dashboard();
+  }
+
+  function header() {
+    var pages = [
+      ['dashboard', 'Dashboard', '#/'],
+      ['tests', 'Tests', '#/tests'],
+      ['media', 'Media', '#/media'],
+      ['flaky', 'Flaky', '#/flaky'],
+      ['trends', 'Trends', '#/trends'],
+    ];
+    var pillClass = report.status === 'passed' ? 'bg-passed' : 'bg-failed';
+    return '<header class="top"><a class="brand" href="#/"><span class="mark"></span><span class="word">Beacon</span></a>' +
+      '<span class="run-title">' + esc(report.title) + '</span><nav class="nav">' +
+      pages.map(function (page) {
+        return '<a href="' + page[2] + '" class="' + (state.page === page[0] ? 'active' : '') + '">' + page[1] + '</a>';
+      }).join('') + '</nav><div class="spacer">' +
+      '<span class="pill ' + pillClass + '">' + (report.status === 'passed' ? 'Passed' : 'Failed') + '</span>' +
+      '<span class="when">' + when(report.startedAt) + ' · ' + duration(report.duration) + '</span>' +
+      '<button type="button" class="ghost" data-action="theme">Theme</button>' +
+      '<button type="button" class="ghost" data-action="help">Shortcuts</button></div></header>';
+  }
+
+  function readHash() {
+    var hash = (location.hash || '#/').replace(/^#/, '');
+    var path = hash.split('?')[0];
+    if (path.indexOf('/tests') === 0) {
+      state.page = 'tests';
+      var id = path.split('/')[2] || '';
+      if (id && id !== state.id) state.attempt = 0;
+      state.id = id;
+    } else if (path.indexOf('/media') === 0) state.page = 'media';
+    else if (path.indexOf('/flaky') === 0) state.page = 'flaky';
+    else if (path.indexOf('/trends') === 0) state.page = 'trends';
+    else state.page = 'dashboard';
+  }
+
+  function render() {
+    readHash();
+    var search = document.querySelector('[data-search]');
+    var caret = search ? search.selectionStart : null;
+    var focused = search && document.activeElement === search;
+    document.title = report.title + ' — Beacon';
+    document.getElementById('app').innerHTML = header() + '<main class="main">' + pageBody() + '</main>' +
+      (state.zoom ? '<div class="lightbox" data-action="close"><img src="' + esc(state.zoom) + '" alt="" /></div>' : '') +
+      (state.help ? '<aside class="help"><strong>Shortcuts</strong><p><kbd>d</kbd> dashboard · <kbd>t</kbd> tests · <kbd>m</kbd> media · <kbd>f</kbd> flaky · <kbd>r</kbd> trends</p><p><kbd>l</kbd> theme · <kbd>/</kbd> search · <kbd>?</kbd> help</p></aside>' : '');
+    if (focused) {
+      var next = document.querySelector('[data-search]');
+      if (next) {
+        next.focus();
+        if (caret != null) next.setSelectionRange(caret, caret);
+      }
+    }
+  }
+
+  document.body.addEventListener('click', function (event) {
+    var spec = event.target.closest('[data-spec]');
+    if (spec) {
+      state.spec = spec.getAttribute('data-spec') || '';
+      state.page = 'tests';
+    }
+    var outcome = event.target.closest('[data-outcome]');
+    if (outcome) state.outcome = outcome.getAttribute('data-outcome');
+    var open = event.target.closest('[data-id]');
+    if (open) {
+      state.id = open.getAttribute('data-id');
+      state.attempt = 0;
+      if (location.hash.indexOf('#/tests/' + state.id) !== 0) location.hash = '#/tests/' + state.id;
+    }
+    var attempt = event.target.closest('[data-attempt]');
+    if (attempt) state.attempt = Number(attempt.getAttribute('data-attempt'));
+    var zoom = event.target.closest('[data-zoom]');
+    if (zoom) state.zoom = zoom.getAttribute('data-zoom');
+    var action = event.target.closest('[data-action]');
+    if (action) {
+      var name = action.getAttribute('data-action');
+      if (name === 'theme') {
+        document.documentElement.classList.toggle('dark');
+        try { localStorage.setItem('beacon-theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light'); } catch (error) {}
+      } else if (name === 'help') state.help = !state.help;
+      else if (name === 'close') state.zoom = '';
+    }
+    if (outcome || spec || open || attempt || zoom || action) render();
+  });
+
+  document.body.addEventListener('input', function (event) {
+    if (!event.target.matches('[data-search]')) return;
+    state.query = event.target.value;
+    render();
+  });
+
+  window.addEventListener('hashchange', render);
+  window.addEventListener('keydown', function (event) {
+    var tag = event.target && event.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === 'd') location.hash = '#/';
+    else if (event.key === 't') location.hash = '#/tests';
+    else if (event.key === 'm') location.hash = '#/media';
+    else if (event.key === 'f') location.hash = '#/flaky';
+    else if (event.key === 'r') location.hash = '#/trends';
+    else if (event.key === 'l') document.querySelector('[data-action="theme"]').click();
+    else if (event.key === '?') { state.help = !state.help; render(); }
+    else if (event.key === 'Escape') { state.zoom = ''; state.help = false; render(); }
+    else if (event.key === '/') {
+      event.preventDefault();
+      if (state.page !== 'tests') location.hash = '#/tests';
+      else {
+        var search = document.querySelector('[data-search]');
+        if (search) search.focus();
+      }
+    }
+  });
+
+  render();
+})();

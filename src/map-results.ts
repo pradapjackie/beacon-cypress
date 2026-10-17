@@ -1,4 +1,4 @@
-import type { BeaconFixture, TestEnd } from './fixture';
+import { createHash } from 'node:crypto';
 import { commandKey, duplicateIndex } from './keys';
 import type {
   CypressAttempt,
@@ -11,6 +11,52 @@ import type {
 
 export { commandKey };
 
+export type ReportOutcome = 'passed' | 'failed' | 'flaky' | 'skipped';
+export type AttemptStatus = 'passed' | 'failed' | 'skipped';
+
+export interface ReportCommand {
+  title: string;
+  duration: number;
+  state: string;
+}
+
+export interface ReportFile {
+  name: string;
+  path: string;
+}
+
+export interface ReportAttempt {
+  status: AttemptStatus;
+  startTime: number;
+  duration: number;
+  error?: { message: string; stack?: string; frame?: string };
+  commands: ReportCommand[];
+  screenshots: ReportFile[];
+  video?: ReportFile;
+}
+
+/** One Cypress test, with every retry kept on that test. */
+export interface ReportTest {
+  id: string;
+  title: string;
+  titlePath: string[];
+  spec: string;
+  outcome: ReportOutcome;
+  tags: string[];
+  duration: number;
+  /** Set when the test failed and a category rule matched, or "Other". */
+  category?: string;
+  attempts: ReportAttempt[];
+}
+
+export interface CypressReportData {
+  status: 'passed' | 'failed';
+  startedAt: number;
+  duration: number;
+  browser?: string;
+  tests: ReportTest[];
+}
+
 /** One list per attempt, or a single list from older callers. */
 export type CommandLogMap = Map<string, CypressCommand[] | CypressCommand[][]>;
 
@@ -22,228 +68,184 @@ const CONTROL_CHARS = /[\u0000-\u001f\u0080-\u009f]/g;
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i;
 
 /**
- * Cypress after:run results, plus command logs collected in the browser,
- * shaped as the event stream Beacon already replays.
+ * Cypress after:run results plus the command log collected in the browser,
+ * as a Cypress report. Nothing here is a Playwright event.
  */
-export function toBeaconFixture(
+export function toCypressReport(
   results: CypressCommandLineResults,
   commands: CommandLogMap,
   scrub: (text: string) => string = (text) => text,
   recordedShots?: RecordedScreenshots,
-): BeaconFixture {
-  const projectName = results.browserName || 'cypress';
-  const events: BeaconFixture['events'] = [
-    {
-      type: 'onBegin',
-      config: {
-        workers: 1,
-        fullyParallel: false,
-        projectNames: [projectName],
-      },
-    },
-  ];
-
-  let tests = 0;
+): CypressReportData {
+  const tests: ReportTest[] = [];
   for (const run of results.runs ?? []) {
     const cursor = {
       value: timeOf(run.stats?.startedAt) || timeOf(results.startedTestsAt) || Date.now(),
     };
     const seen = new Map<string, number>();
     const shotIndex = indexScreenshots(run.screenshots ?? []);
+    const videoTarget = (run.tests ?? []).find((candidate) => !skippedState(finalState(candidate)));
+    const specFailed =
+      (run.tests ?? []).some((candidate) => finalState(candidate) === 'failed') || Boolean(run.error);
     for (const test of run.tests ?? []) {
-      tests += 1;
       const duplicate = duplicateIndex(seen, test.title);
-      events.push(
-        ...testEvents(run, test, projectName, commands, cursor, duplicate, scrub, shotIndex, recordedShots),
+      tests.push(
+        mapTest(run, test, commands, cursor, duplicate, scrub, shotIndex, recordedShots, videoTarget, specFailed),
       );
     }
-    if (run.error) {
-      tests += 1;
-      events.push(specErrorEvent(run, projectName, cursor, scrub));
-    }
+    if (run.error) tests.push(specError(run, cursor, scrub));
   }
 
-  if (tests === 0 && results.status === 'failed') {
-    events.push(runErrorEvent(results, projectName, scrub));
-  }
+  if (tests.length === 0 && results.status === 'failed') tests.push(runError(results, scrub));
 
   const failed =
-    results.status === 'failed' ||
-    (results.runs ?? []).some(
-      (run) => Boolean(run.error) || (run.tests ?? []).some((test) => finalState(test) === 'failed'),
-    );
-  events.push({ type: 'onEnd', status: failed ? 'failed' : 'passed' });
+    results.status === 'failed' || tests.some((test) => test.outcome === 'failed');
+  const startedAt =
+    timeOf(results.startedTestsAt) ||
+    tests.find((test) => test.attempts[0]?.startTime)?.attempts[0]?.startTime ||
+    Date.now();
 
   return {
-    recorderVersion: 1,
-    recordedAt: new Date().toISOString(),
-    events,
+    status: failed ? 'failed' : 'passed',
+    startedAt,
+    duration: runDuration(results, tests, startedAt),
+    ...(results.browserName ? { browser: results.browserName } : {}),
+    tests,
   };
 }
 
-function testEvents(
+function mapTest(
   run: CypressSpecRun,
   test: CypressTestResult,
-  projectName: string,
   commands: CommandLogMap,
   cursor: { value: number },
   duplicate: number,
   scrub: (text: string) => string,
   shotIndex: ShotIndex,
-  recordedShots?: RecordedScreenshots,
-): TestEnd[] {
+  recordedShots: RecordedScreenshots | undefined,
+  videoTarget: CypressTestResult | undefined,
+  specFailed: boolean,
+): ReportTest {
   const attempts = test.attempts?.length ? test.attempts : [fallbackAttempt(test)];
-  const outcome = outcomeOf(test);
   const shots = classifyScreenshots(test, shotIndex);
   const logged = commandAttempts(commands, run.spec.relative, test.title, attempts.length, duplicate);
   const title = displayTitle(test.title, duplicate);
-  const videoTarget = (run.tests ?? []).find((candidate) => !skippedState(finalState(candidate)));
-  const specFailed = (run.tests ?? []).some((candidate) => finalState(candidate) === 'failed') || Boolean(run.error);
-
-  return attempts.map((attempt, index) => {
+  const mapped = attempts.map((attempt, index) => {
     const failed = attempt.state === 'failed';
-    const attachments: Array<{ name: string; contentType: string; path: string }> = [];
-    for (const shot of shots.failures.get(index) ?? []) attachments.push(imageAttachment(shot));
+    const screenshots: ReportFile[] = [];
+    for (const shot of shots.failures.get(index) ?? []) screenshots.push(imageFile(shot));
     if (index === attempts.length - 1) {
-      for (const shot of shots.manual) attachments.push(imageAttachment(shot));
+      for (const shot of shots.manual) screenshots.push(imageFile(shot));
     }
-    const recorded =
-      recordedShots?.get(commandKey(run.spec.relative, test.title, duplicate))?.get(index) ?? [];
+    const recorded = recordedShots?.get(commandKey(run.spec.relative, test.title, duplicate))?.get(index) ?? [];
     for (const shot of recorded) {
-      if (attachments.some((attachment) => attachment.path === shot.path)) continue;
-      attachments.push(imageAttachment(shot));
+      if (screenshots.some((file) => file.path === shot.path)) continue;
+      screenshots.push(imageFile(shot));
     }
     const showVideo = specFailed ? failed : test === videoTarget;
-    if (run.video && index === attempts.length - 1 && showVideo) {
-      attachments.push({
-        name: 'video',
-        contentType: contentTypeFor(run.video),
-        path: run.video,
-      });
-    }
+    const video =
+      run.video && index === attempts.length - 1 && showVideo
+        ? { name: 'video', path: run.video }
+        : undefined;
     const error = attempt.error;
-    const steps = stepsFrom(logged[index] ?? [], scrub);
+    const commandList = commandsFrom(logged[index] ?? [], scrub);
     const timing = attemptTiming(attempt, test, index, attempts.length, cursor);
-    const commandError = steps.find((step) => step.error)?.error?.message;
+    const commandError = commandList.find((command) => command.state === 'failed')?.title;
     return {
-      type: 'onTestEnd' as const,
-      test: {
-        title: title.at(-1) ?? 'test',
-        titlePath: ['', projectName, run.spec.relative, ...title],
-        file: run.spec.relative,
-        line: 1,
-        column: 1,
-        projectName,
-        tags: tagsIn(test.title, test.tags),
-        annotations: [],
-        timeout: 0,
-        // The reporter keeps the test object from the first attempt.
-        outcome,
-      },
-      result: {
-        retry: index,
-        workerIndex: 0,
-        parallelIndex: 0,
-        startTime: timing.startTime,
-        duration: timing.duration,
-        status: statusOf(attempt.state),
-        errors: failed
-          ? [
-              {
-                message: scrub(
-                  error?.message ||
-                    (index === attempts.length - 1 ? test.displayError : undefined) ||
-                    commandError ||
-                    (index === attempts.length - 1
-                      ? 'failed'
-                      : 'failed (details only recorded for the final attempt)'),
-                ),
-                stack: error?.stack ? scrub(error.stack) : undefined,
-                snippet: error?.codeFrame?.frame ? scrub(error.codeFrame.frame) : undefined,
-              },
-            ]
-          : [],
-        stdout: [],
-        stderr: [],
-        attachments,
-        steps,
-      },
+      status: statusOf(attempt.state),
+      startTime: timing.startTime,
+      duration: timing.duration,
+      ...(failed
+        ? {
+            error: {
+              message: scrub(
+                error?.message ||
+                  (index === attempts.length - 1 ? test.displayError : undefined) ||
+                  commandError ||
+                  (index === attempts.length - 1
+                    ? 'failed'
+                    : 'failed (details only recorded for the final attempt)'),
+              ),
+              ...(error?.stack ? { stack: scrub(error.stack) } : {}),
+              ...(error?.codeFrame?.frame ? { frame: scrub(error.codeFrame.frame) } : {}),
+            },
+          }
+        : {}),
+      commands: commandList,
+      screenshots,
+      ...(video ? { video } : {}),
     };
   });
-}
-
-function specErrorEvent(
-  run: CypressSpecRun,
-  projectName: string,
-  cursor: { value: number },
-  scrub: (text: string) => string,
-): TestEnd {
-  const attachments = run.video
-    ? [{ name: 'video', contentType: contentTypeFor(run.video), path: run.video }]
-    : [];
   return {
-    type: 'onTestEnd',
-    test: {
-      title: 'failed to load',
-      titlePath: ['', projectName, run.spec.relative, 'failed to load'],
-      file: run.spec.relative,
-      line: 1,
-      column: 1,
-      projectName,
-      tags: [],
-      annotations: [],
-      timeout: 0,
-      outcome: 'unexpected',
-    },
-    result: {
-      retry: 0,
-      workerIndex: 0,
-      parallelIndex: 0,
-      startTime: cursor.value,
-      duration: 0,
-      status: 'failed',
-      errors: [{ message: scrub(run.error || 'The spec failed before any test ran') }],
-      stdout: [],
-      stderr: [],
-      attachments,
-      steps: [],
-    },
+    id: caseId(run.spec.relative, title),
+    title: title.at(-1) ?? 'test',
+    titlePath: title,
+    spec: run.spec.relative,
+    outcome: outcomeOf(test),
+    tags: tagsIn(test.title, test.tags),
+    duration: mapped.reduce((sum, attempt) => sum + attempt.duration, 0),
+    attempts: mapped,
   };
 }
 
-function runErrorEvent(
-  results: CypressCommandLineResults,
-  projectName: string,
-  scrub: (text: string) => string,
-): TestEnd {
+function specError(run: CypressSpecRun, cursor: { value: number }, scrub: (text: string) => string): ReportTest {
+  const title = ['failed to load'];
   return {
-    type: 'onTestEnd',
-    test: {
-      title: 'Cypress run failed',
-      titlePath: ['', projectName, 'Cypress run failed'],
-      file: '',
-      line: 1,
-      column: 1,
-      projectName,
-      tags: [],
-      annotations: [],
-      timeout: 0,
-      outcome: 'unexpected',
-    },
-    result: {
-      retry: 0,
-      workerIndex: 0,
-      parallelIndex: 0,
-      startTime: timeOf(results.startedTestsAt) || Date.now(),
-      duration: results.totalDuration ?? 0,
-      status: 'failed',
-      errors: [{ message: scrub(results.message || 'Cypress run failed') }],
-      stdout: [],
-      stderr: [],
-      attachments: [],
-      steps: [],
-    },
+    id: caseId(run.spec.relative, title),
+    title: 'failed to load',
+    titlePath: title,
+    spec: run.spec.relative,
+    outcome: 'failed',
+    tags: [],
+    duration: 0,
+    attempts: [
+      {
+        status: 'failed',
+        startTime: cursor.value,
+        duration: 0,
+        error: { message: scrub(run.error || 'The spec failed before any test ran') },
+        commands: [],
+        screenshots: [],
+        ...(run.video ? { video: { name: 'video', path: run.video } } : {}),
+      },
+    ],
   };
+}
+
+function runError(results: CypressCommandLineResults, scrub: (text: string) => string): ReportTest {
+  const title = ['Cypress run failed'];
+  return {
+    id: caseId('', title),
+    title: 'Cypress run failed',
+    titlePath: title,
+    spec: '',
+    outcome: 'failed',
+    tags: [],
+    duration: results.totalDuration ?? 0,
+    attempts: [
+      {
+        status: 'failed',
+        startTime: timeOf(results.startedTestsAt) || Date.now(),
+        duration: results.totalDuration ?? 0,
+        error: { message: scrub(results.message || 'Cypress run failed') },
+        commands: [],
+        screenshots: [],
+      },
+    ],
+  };
+}
+
+function caseId(spec: string, titlePath: string[]): string {
+  return createHash('sha1').update(`${spec}\n${titlePath.join('\n')}`).digest('hex').slice(0, 16);
+}
+
+function runDuration(results: CypressCommandLineResults, tests: ReportTest[], startedAt: number): number {
+  if (typeof results.totalDuration === 'number') return results.totalDuration;
+  const ended = timeOf(results.endedTestsAt);
+  if (ended && startedAt && ended >= startedAt) return ended - startedAt;
+  const fromSpecs = (results.runs ?? []).reduce((sum, run) => sum + (run.stats?.duration ?? 0), 0);
+  if (fromSpecs > 0) return fromSpecs;
+  return tests.reduce((sum, test) => sum + test.duration, 0);
 }
 
 function displayTitle(title: string[], duplicate: number): string[] {
@@ -294,17 +296,17 @@ function skippedState(state: string): boolean {
   return state === 'pending' || state === 'skipped';
 }
 
-function outcomeOf(test: CypressTestResult): 'expected' | 'unexpected' | 'flaky' | 'skipped' {
+function outcomeOf(test: CypressTestResult): ReportOutcome {
   const attempts = test.attempts?.length ? test.attempts : [fallbackAttempt(test)];
   const states = attempts.map((attempt) => attempt.state);
   const last = states.at(-1) ?? test.state;
   if (skippedState(last)) return 'skipped';
   if (last === 'passed' && states.some((state) => state === 'failed')) return 'flaky';
-  if (last === 'passed') return 'expected';
-  return 'unexpected';
+  if (last === 'passed') return 'passed';
+  return 'failed';
 }
 
-function statusOf(state: string): 'passed' | 'failed' | 'skipped' | 'timedOut' {
+function statusOf(state: string): AttemptStatus {
   if (state === 'passed') return 'passed';
   if (skippedState(state)) return 'skipped';
   return 'failed';
@@ -357,8 +359,8 @@ function isCommand(value: unknown): value is CypressCommand {
 
 const MAX_STEP_CHARS = 4_000;
 
-function stepsFrom(commands: CypressCommand[], scrub: (text: string) => string): TestEnd['result']['steps'] {
-  const steps: TestEnd['result']['steps'] = [];
+function commandsFrom(commands: CypressCommand[], scrub: (text: string) => string): ReportCommand[] {
+  const list: ReportCommand[] = [];
   for (let index = 0; index < commands.length; index += 1) {
     const command = commands[index];
     if (!isCommand(command)) continue;
@@ -366,17 +368,13 @@ function stepsFrom(commands: CypressCommand[], scrub: (text: string) => string):
     const duration =
       command.startedAt != null && next != null && next >= command.startedAt ? next - command.startedAt : 0;
     const raw = command.message ? `${command.name} ${command.message}` : command.name;
-    const title = clip(scrub(raw));
-    steps.push({
-      title,
-      category: 'test.step',
-      startTime: command.startedAt ?? index,
+    list.push({
+      title: clip(scrub(raw)),
       duration,
-      steps: [],
-      ...(command.state === 'failed' ? { error: { message: title } } : {}),
+      state: command.state,
     });
   }
-  return steps;
+  return list;
 }
 
 function clip(value: string): string {
@@ -385,10 +383,9 @@ function clip(value: string): string {
   return `${text.slice(0, MAX_STEP_CHARS)}…`;
 }
 
-function imageAttachment(shot: CypressScreenshot): { name: string; contentType: string; path: string } {
+function imageFile(shot: CypressScreenshot): ReportFile {
   return {
     name: shot.name || 'screenshot',
-    contentType: 'image/png',
     path: shot.path,
   };
 }
@@ -530,7 +527,3 @@ function startsWithBytes(value: string, prefix: string): boolean {
   return isBytePrefix(prefix, value);
 }
 
-function contentTypeFor(file: string): string {
-  if (file.endsWith('.webm')) return 'video/webm';
-  return 'video/mp4';
-}

@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { commandKey, toBeaconFixture } from '../src/map-results';
+import { commandKey, toCypressReport, type CypressReportData } from '../src/map-results';
 import { writeBeaconReport } from '../src/write-report';
 import type { CypressCommandLineResults } from '../src/types';
 
@@ -64,7 +64,11 @@ function results(shot: string, video: string): CypressCommandLineResults {
   };
 }
 
-describe('toBeaconFixture', () => {
+function rows(report: CypressReportData) {
+  return report.tests.flatMap((test) => test.attempts.map((attempt) => ({ test, attempt })));
+}
+
+describe('toCypressReport', () => {
   it('maps retries, screenshots, video, and the command log', () => {
     const commands = new Map([
       [
@@ -72,33 +76,27 @@ describe('toBeaconFixture', () => {
         [{ name: 'get', message: '#email', state: 'passed' }],
       ],
     ]);
-    const fixture = toBeaconFixture(results('/tmp/shot.png', '/tmp/run.mp4'), commands);
-    const tests = fixture.events.filter((event) => event.type === 'onTestEnd');
-    expect(tests).toHaveLength(3);
+    const report = toCypressReport(results('/tmp/shot.png', '/tmp/run.mp4'), commands);
+    const listed = rows(report);
+    expect(listed).toHaveLength(3);
 
-    const failed = tests[0];
-    if (failed?.type !== 'onTestEnd') throw new Error('expected a test');
-    expect(failed.test.outcome).toBe('unexpected');
-    expect(failed.test.projectName).toBe('chrome');
-    expect(failed.result.errors[0]?.message).toBe('expected 1 to equal 2');
-    expect(failed.result.attachments.map((attachment) => attachment.contentType)).toEqual([
-      'image/png',
-      'video/mp4',
-    ]);
-    expect(failed.result.steps[0]?.title).toBe('get #email');
+    expect(listed[0]?.test.outcome).toBe('failed');
+    expect(report.browser).toBe('chrome');
+    expect(listed[0]?.attempt.error?.message).toBe('expected 1 to equal 2');
+    expect(listed[0]?.attempt.screenshots.map((shot) => shot.path)).toEqual(['/tmp/shot.png']);
+    expect(listed[0]?.attempt.video?.path).toBe('/tmp/run.mp4');
+    expect(listed[0]?.attempt.commands[0]?.title).toBe('get #email');
 
-    const retry = tests[1];
-    const passed = tests[2];
-    if (retry?.type !== 'onTestEnd' || passed?.type !== 'onTestEnd') throw new Error('expected attempts');
-    expect(retry.test.outcome).toBe('flaky');
-    expect(passed.test.outcome).toBe('flaky');
-    expect(passed.test.tags).toEqual(['@smoke']);
-    expect(passed.result.attachments).toEqual([]);
+    expect(listed[1]?.test.outcome).toBe('flaky');
+    expect(listed[2]?.test.outcome).toBe('flaky');
+    expect(listed[2]?.test.tags).toEqual(['@smoke']);
+    expect(listed[2]?.attempt.screenshots).toEqual([]);
+    expect(listed[2]?.attempt.video).toBeUndefined();
   });
 
   it('uses test duration when Cypress omits attempt timings', () => {
     const started = Date.parse('2026-10-16T12:00:00.000Z');
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         startedTestsAt: '2026-10-16T12:00:00.000Z',
@@ -115,14 +113,13 @@ describe('toBeaconFixture', () => {
       },
       new Map(),
     );
-    const tests = fixture.events.filter((event) => event.type === 'onTestEnd');
-    if (tests[0]?.type !== 'onTestEnd' || tests[1]?.type !== 'onTestEnd') throw new Error('expected tests');
-    expect(tests[0].result).toMatchObject({ startTime: started, duration: 65 });
-    expect(tests[1].result).toMatchObject({ startTime: started + 65, duration: 4235 });
+    const listed = rows(report);
+    expect(listed[0]?.attempt).toMatchObject({ startTime: started, duration: 65 });
+    expect(listed[1]?.attempt).toMatchObject({ startTime: started + 65, duration: 4235 });
   });
 
   it('does not give a shorter title the longer test’s screenshot', () => {
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -141,16 +138,15 @@ describe('toBeaconFixture', () => {
       },
       new Map(),
     );
-    const tests = fixture.events.filter((event) => event.type === 'onTestEnd');
-    const paths = tests.map((event) =>
-      event.type === 'onTestEnd' ? event.result.attachments.map((attachment) => attachment.path) : [],
-    );
-    expect(paths).toEqual([['/tmp/once.png'], ['/tmp/twice.png']]);
+    expect(report.tests.map((test) => test.attempts[0]?.screenshots.map((shot) => shot.path))).toEqual([
+      ['/tmp/once.png'],
+      ['/tmp/twice.png'],
+    ]);
   });
 
   it('keeps each retry’s screenshot and commands on that attempt', () => {
     const key = commandKey('cypress/e2e/checkout.cy.js', ['Cart', 'applies coupon']);
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -187,21 +183,20 @@ describe('toBeaconFixture', () => {
         ],
       ]),
     );
-    const tests = fixture.events.filter((event) => event.type === 'onTestEnd');
-    expect(tests.map((event) => (event.type === 'onTestEnd' ? event.result.attachments.map((a) => a.path) : []))).toEqual([
+    const listed = rows(report);
+    expect(listed.map((row) => row.attempt.screenshots.map((shot) => shot.path))).toEqual([
       ['/tmp/a1.png'],
       ['/tmp/a2.png'],
       ['/tmp/a3.png', '/tmp/manual.png'],
     ]);
-    if (tests[0]?.type !== 'onTestEnd' || tests[1]?.type !== 'onTestEnd') throw new Error('expected attempts');
-    expect(tests[0].result.errors[0]?.message).toBe('get #coupon');
-    expect(tests[0].result.steps[0]).toMatchObject({ title: 'get #coupon', duration: 400 });
-    expect(tests[1].result.steps).toHaveLength(1);
-    expect(tests[1].result.errors[0]?.message).toBe('get #coupon');
+    expect(listed[0]?.attempt.error?.message).toBe('get #coupon');
+    expect(listed[0]?.attempt.commands[0]).toMatchObject({ title: 'get #coupon', duration: 400 });
+    expect(listed[1]?.attempt.commands).toHaveLength(1);
+    expect(listed[1]?.attempt.error?.message).toBe('get #coupon');
   });
 
   it('does not reuse another spec’s command log for the same title', () => {
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -215,13 +210,11 @@ describe('toBeaconFixture', () => {
         [commandKey('cypress/e2e/a.cy.js', ['signs in']), [{ name: 'get', message: '#email', state: 'passed' }]],
       ]),
     );
-    const test = fixture.events.find((event) => event.type === 'onTestEnd');
-    if (test?.type !== 'onTestEnd') throw new Error('expected a test');
-    expect(test.result.steps).toEqual([]);
+    expect(report.tests[0]?.attempts[0]?.commands).toEqual([]);
   });
 
   it('attaches a named screenshot from a passing test', () => {
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -234,13 +227,11 @@ describe('toBeaconFixture', () => {
       },
       new Map(),
     );
-    const test = fixture.events.find((event) => event.type === 'onTestEnd');
-    if (test?.type !== 'onTestEnd') throw new Error('expected a test');
-    expect(test.result.attachments.map((attachment) => attachment.path)).toEqual(['/tmp/named.png']);
+    expect(report.tests[0]?.attempts[0]?.screenshots.map((shot) => shot.path)).toEqual(['/tmp/named.png']);
   });
 
   it('keeps both tests when two titles in one spec are the same', () => {
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -258,36 +249,27 @@ describe('toBeaconFixture', () => {
         [commandKey('cypress/e2e/generated.cy.js', ['same'], 1), [{ name: 'get', message: '#b', state: 'failed' }]],
       ]),
     );
-    const tests = fixture.events.filter((event) => event.type === 'onTestEnd');
-    expect(tests.map((event) => (event.type === 'onTestEnd' ? event.test.title : ''))).toEqual(['same', 'same (2)']);
-    expect(tests.map((event) => (event.type === 'onTestEnd' ? event.test.outcome : ''))).toEqual([
-      'expected',
-      'unexpected',
-    ]);
-    expect(tests.map((event) => (event.type === 'onTestEnd' ? event.result.steps[0]?.title : ''))).toEqual([
-      'get #a',
-      'get #b',
-    ]);
-    expect(fixture.events.at(-1)).toMatchObject({ type: 'onEnd', status: 'failed' });
+    expect(report.tests.map((test) => test.title)).toEqual(['same', 'same (2)']);
+    expect(report.tests.map((test) => test.outcome)).toEqual(['passed', 'failed']);
+    expect(report.tests.map((test) => test.attempts[0]?.commands[0]?.title)).toEqual(['get #a', 'get #b']);
+    expect(report.status).toBe('failed');
   });
 
   it('turns a spec that crashed before any test into a failure', () => {
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'failed',
         runs: [{ spec: { relative: 'cypress/e2e/broken.cy.js' }, error: 'Cannot find module "./missing"', tests: [] }],
       },
       new Map(),
     );
-    const test = fixture.events.find((event) => event.type === 'onTestEnd');
-    if (test?.type !== 'onTestEnd') throw new Error('expected a test');
-    expect(test.test.title).toBe('failed to load');
-    expect(test.result.errors[0]?.message).toBe('Cannot find module "./missing"');
-    expect(fixture.events.at(-1)).toMatchObject({ type: 'onEnd', status: 'failed' });
+    expect(report.tests[0]?.title).toBe('failed to load');
+    expect(report.tests[0]?.attempts[0]?.error?.message).toBe('Cannot find module "./missing"');
+    expect(report.status).toBe('failed');
   });
 
   it('matches screenshots whose titles lost filename characters', () => {
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -302,16 +284,14 @@ describe('toBeaconFixture', () => {
       },
       new Map(),
     );
-    const test = fixture.events.find((event) => event.type === 'onTestEnd');
-    if (test?.type !== 'onTestEnd') throw new Error('expected a test');
-    expect(test.result.attachments.map((attachment) => attachment.path)).toEqual(['/tmp/odd.png']);
+    expect(report.tests[0]?.attempts[0]?.screenshots.map((shot) => shot.path)).toEqual(['/tmp/odd.png']);
   });
 
   it('matches a screenshot whose filename was truncated', () => {
     const leaf = 'x'.repeat(300);
     const full = `Cart -- ${leaf} (failed)`;
     const name = `${Buffer.from(full).subarray(0, 250).toString('utf8')}.png`;
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -324,13 +304,11 @@ describe('toBeaconFixture', () => {
       },
       new Map(),
     );
-    const test = fixture.events.find((event) => event.type === 'onTestEnd');
-    if (test?.type !== 'onTestEnd') throw new Error('expected a test');
-    expect(test.result.attachments.map((attachment) => attachment.path)).toEqual(['/tmp/long.png']);
+    expect(report.tests[0]?.attempts[0]?.screenshots.map((shot) => shot.path)).toEqual(['/tmp/long.png']);
   });
 
   it('does not treat an email address as a tag', () => {
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -349,13 +327,11 @@ describe('toBeaconFixture', () => {
       },
       new Map(),
     );
-    const test = fixture.events.find((event) => event.type === 'onTestEnd');
-    if (test?.type !== 'onTestEnd') throw new Error('expected a test');
-    expect(test.test.tags).toEqual(['@smoke', '@regression']);
+    expect(report.tests[0]?.tags).toEqual(['@smoke', '@regression']);
   });
 
   it('redacts secrets in command steps and clips huge messages', () => {
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -376,14 +352,12 @@ describe('toBeaconFixture', () => {
       ]),
       (text) => text.replace(/SuperSecretP@ss1/g, '[redacted]'),
     );
-    const test = fixture.events.find((event) => event.type === 'onTestEnd');
-    if (test?.type !== 'onTestEnd') throw new Error('expected a test');
-    expect(test.result.steps[0]?.title).toBe('type [redacted]');
-    expect(test.result.steps[1]?.title.length).toBe(4_001);
+    expect(report.tests[0]?.attempts[0]?.commands[0]?.title).toBe('type [redacted]');
+    expect(report.tests[0]?.attempts[0]?.commands[1]?.title.length).toBe(4_001);
   });
 
   it('puts the spec video on the first test that ran, not a leading skip', () => {
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -399,13 +373,12 @@ describe('toBeaconFixture', () => {
       },
       new Map(),
     );
-    const tests = fixture.events.filter((event) => event.type === 'onTestEnd');
-    expect(tests.map((event) => (event.type === 'onTestEnd' ? event.result.attachments.length : 0))).toEqual([0, 1]);
+    expect(report.tests.map((test) => (test.attempts[0]?.video ? 1 : 0))).toEqual([0, 1]);
   });
 
   it('keeps both attempts of a retried test when they share a key', () => {
     const key = commandKey('cypress/e2e/a.cy.js', ['S', 'flaky']);
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -431,17 +404,13 @@ describe('toBeaconFixture', () => {
         ],
       ]),
     );
-    const tests = fixture.events.filter((event) => event.type === 'onTestEnd');
-    expect(tests.map((event) => (event.type === 'onTestEnd' ? event.result.steps[0]?.title : ''))).toEqual([
-      'get #coupon',
-      'get #coupon',
-    ]);
+    expect(rows(report).map((row) => row.attempt.commands[0]?.title)).toEqual(['get #coupon', 'get #coupon']);
   });
 
   it('does not throw when a command list is a sparse attempt array', () => {
     const sparse: Array<Array<{ name: string; message: string; state: string }> | undefined> = [];
     sparse[1] = [{ name: 'get', message: '#b', state: 'passed' }];
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -456,14 +425,12 @@ describe('toBeaconFixture', () => {
       },
       new Map([[commandKey('cypress/e2e/a.cy.js', ['same'], 1), sparse as never]]),
     );
-    const tests = fixture.events.filter((event) => event.type === 'onTestEnd');
-    expect(tests).toHaveLength(2);
-    if (tests[1]?.type !== 'onTestEnd') throw new Error('expected the second test');
-    expect(tests[1].result.steps).toEqual([]);
+    expect(report.tests).toHaveLength(2);
+    expect(report.tests[1]?.attempts[0]?.commands).toEqual([]);
   });
 
   it('says when an earlier attempt has no command log', () => {
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -482,13 +449,13 @@ describe('toBeaconFixture', () => {
       },
       new Map(),
     );
-    const first = fixture.events.find((event) => event.type === 'onTestEnd');
-    if (first?.type !== 'onTestEnd') throw new Error('expected a test');
-    expect(first.result.errors[0]?.message).toBe('failed (details only recorded for the final attempt)');
+    expect(report.tests[0]?.attempts[0]?.error?.message).toBe(
+      'failed (details only recorded for the final attempt)',
+    );
   });
 
   it('attaches a named screenshot recorded for that attempt', () => {
-    const fixture = toBeaconFixture(
+    const report = toCypressReport(
       {
         status: 'finished',
         runs: [
@@ -508,9 +475,7 @@ describe('toBeaconFixture', () => {
         ],
       ]),
     );
-    const test = fixture.events.find((event) => event.type === 'onTestEnd');
-    if (test?.type !== 'onTestEnd') throw new Error('expected a test');
-    expect(test.result.attachments.map((attachment) => attachment.path)).toEqual(['/tmp/checkout-page.png']);
+    expect(report.tests[0]?.attempts[0]?.screenshots.map((shot) => shot.path)).toEqual(['/tmp/checkout-page.png']);
   });
 });
 
@@ -528,16 +493,23 @@ describe('writeBeaconReport', () => {
     });
 
     expect(written.tests).toBe(2);
-    const raw = await readFile(path.join(written.outputDir, 'data', 'manifest.js'), 'utf8');
-    const manifest = JSON.parse(raw.slice(raw.indexOf(', ') + 2, raw.lastIndexOf(');'))) as {
-      counts: { total: number; unexpected: number; flaky: number };
-      ui?: { title?: string };
+    const report = JSON.parse(await readFile(path.join(written.outputDir, 'data', 'report.json'), 'utf8')) as {
+      title: string;
+      counts: { total: number; failed: number; flaky: number };
       environment?: Record<string, string>;
+      tests: Array<{ title: string }>;
     };
-    expect(manifest.counts).toMatchObject({ total: 2, unexpected: 1, flaky: 1 });
-    expect(manifest.ui?.title).toBe('Cypress demo');
-    expect(manifest.environment?.cypress).toBe('13.15.0');
-    expect(manifest.environment?.browser).toBe('chrome');
+    expect(report.counts).toMatchObject({ total: 2, failed: 1, flaky: 1 });
+    expect(report.title).toBe('Cypress demo');
+    expect(report.environment?.cypress).toBe('13.15.0');
+    expect(report.environment?.browser).toBe('chrome');
+    const html = await readFile(path.join(written.outputDir, 'index.html'), 'utf8');
+    expect(html).toContain('--ground');
+    expect(html).toContain('Cypress demo');
+    expect(html).toContain('signs in');
+    expect(html).toContain('attachments/');
+    expect(html).not.toContain('playwright');
+    expect(html).not.toContain('beacon-reporter');
   });
 
   it('still writes a report when scrub is not an array, and drops stale attachments', async () => {

@@ -1,8 +1,6 @@
 # beacon-cypress
 
-Beacon reports for Cypress. The dashboard, test list, history, compare, and flaky pages are the same ones [`beacon-reporter`](https://www.npmjs.com/package/beacon-reporter) ships for Playwright. This package collects a Cypress run and writes that report.
-
-Screenshots, the spec video, retries, and the Cypress command log are included. Cypress has no Playwright trace zip and no worker pool, so those two views stay empty.
+Beacon reports for Cypress. This package collects a Cypress run and writes its own HTML report: dashboard, test list, command log, screenshots, video, retries, and run history. It does not use Playwright or `beacon-reporter`.
 
 ## Setup
 
@@ -60,10 +58,10 @@ beaconCypress({
 After `cypress run`, open the report:
 
 ```bash
-npx beacon open beacon-report
+npx beacon-cypress open beacon-report
 ```
 
-`beacon` comes from `beacon-reporter`, which this package installs for you.
+The report is a single `index.html` plus an `attachments/` folder. `open` serves that folder on a local port.
 
 ## Options
 
@@ -74,7 +72,7 @@ npx beacon open beacon-report
 | `outputFolder` | `beacon-report` | Report directory, relative to the Cypress project. |
 | `title` | `Cypress` | Header title. |
 | `history` | `.beacon-history`, 30 runs | Pass `false` to skip history. |
-| `categories` | — | Same failure category rules as Beacon. |
+| `categories` | assertion and timeout | `{ name, messageRegex?, stackRegex? }[]` matched against errors. |
 | `scrub` | — | Array of `{ pattern, flags?, replacement? }`. Applied to errors, command steps, and text attachments. |
 | `environment` | browser, Cypress version, OS | Extra key-values on the environment card. |
 

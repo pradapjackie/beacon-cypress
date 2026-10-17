@@ -7,4 +7,7 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   target: 'node20',
+  esbuildOptions(options) {
+    options.loader = { ...options.loader, '.styles': 'text', '.client': 'text' };
+  },
 });

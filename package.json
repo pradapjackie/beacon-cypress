@@ -1,14 +1,16 @@
 {
   "name": "beacon-cypress",
-  "version": "0.1.2",
-  "description": "Beacon HTML reports for Cypress. Same dashboard as beacon-reporter, fed by Cypress runs.",
+  "version": "0.2.0",
+  "description": "Beacon HTML reports for Cypress.",
   "keywords": [
     "cypress",
     "reporter",
     "html",
-    "beacon",
-    "playwright"
+    "beacon"
   ],
+  "bin": {
+    "beacon-cypress": "./bin/beacon-cypress.mjs"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -57,7 +59,8 @@
     "examples/cypress.config.js",
     "examples/package.json",
     "examples/cypress/e2e/smoke.cy.js",
-    "examples/cypress/support/e2e.js"
+    "examples/cypress/support/e2e.js",
+    "bin/beacon-cypress.mjs"
   ],
   "engines": {
     "node": ">=20"
@@ -67,9 +70,6 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
-  },
-  "dependencies": {
-    "beacon-reporter": "^0.1.2"
   },
   "peerDependencies": {
     "cypress": ">=13"
