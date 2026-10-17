@@ -28,6 +28,9 @@ for (let index = 1; index < args.length; index += 1) {
     }
     port = parsed;
     index += 1;
+  } else if (args[index].startsWith('-')) {
+    console.error(`beacon-cypress: unknown option ${args[index]}`);
+    process.exit(1);
   } else if (args[index]) {
     dir = args[index];
   }
@@ -66,7 +69,7 @@ function listen(nextPort) {
     try {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
       let pathname = decodeURIComponent(url.pathname);
-      if (pathname === '/') pathname = '/index.html';
+      if (pathname === '/' || pathname === '/index.html') pathname = await reportPage();
       const file = path.resolve(root, `.${pathname}`);
       if (file !== root && !file.startsWith(root + path.sep)) {
         response.writeHead(403);
@@ -89,6 +92,19 @@ function listen(nextPort) {
   server.listen(nextPort, '127.0.0.1', () => {
     console.log(`Beacon report: http://127.0.0.1:${nextPort}`);
   });
+}
+
+async function reportPage() {
+  try {
+    const html = await readFile(path.join(root, 'index.html'), 'utf8');
+    const ours =
+      html.includes('beacon-cypress-report') ||
+      html.includes('window.__BEACON__') ||
+      html.includes('window.__REPORT__');
+    return ours ? '/index.html' : '/beacon.html';
+  } catch {
+    return '/beacon.html';
+  }
 }
 
 function parsePort(value) {

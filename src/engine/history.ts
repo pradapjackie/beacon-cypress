@@ -34,7 +34,6 @@ export interface HistoryResult {
 }
 
 const UNEXPECTED = TEST_OUTCOMES.indexOf('unexpected');
-const FAILING = new Set([UNEXPECTED, TEST_OUTCOMES.indexOf('flaky')]);
 
 async function loadRuns(dir: string): Promise<HistoryRun[]> {
   let names: string[] = [];
@@ -117,7 +116,7 @@ export async function updateHistory(
         const entry = run.cases[detail.caseId];
         if (!entry) continue;
         appearances += 1;
-        if (FAILING.has(entry[0])) failures += 1;
+        if (entry[0] === UNEXPECTED) failures += 1;
       }
       return {
         caseId: detail.caseId,

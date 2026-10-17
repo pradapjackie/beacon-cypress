@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { pipeline } from 'node:stream';
@@ -46,6 +46,7 @@ export function serveReport(reportDir: string, port: number): http.Server {
     if (existsSync(filePath) && statSync(filePath).isDirectory()) {
       filePath = path.join(filePath, 'index.html');
     }
+    filePath = preferBeaconPage(filePath);
     if (!existsSync(filePath)) {
       res.writeHead(404).end('Not found');
       return;
@@ -67,4 +68,18 @@ export function serveReport(reportDir: string, port: number): http.Server {
 
   server.listen(port);
   return server;
+}
+
+/** A foreign index.html stays on disk; the report itself is beacon.html. */
+function preferBeaconPage(filePath: string): string {
+  if (path.basename(filePath) !== 'index.html') return filePath;
+  const beacon = path.join(path.dirname(filePath), 'beacon.html');
+  if (!existsSync(beacon)) return filePath;
+  if (!existsSync(filePath)) return beacon;
+  const html = readFileSync(filePath, 'utf8');
+  const ours =
+    html.includes('beacon-cypress-report') ||
+    html.includes('window.__BEACON__') ||
+    html.includes('window.__REPORT__');
+  return ours ? filePath : beacon;
 }

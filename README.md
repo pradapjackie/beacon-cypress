@@ -69,7 +69,7 @@ The report is the Beacon UI plus an `attachments/` folder. `open` serves that fo
 
 | Option | Default | |
 |---|---|---|
-| `outputFolder` | `beacon-report` | Report directory, relative to the Cypress project. An existing `index.html` that is not a Beacon report is left in place. |
+| `outputFolder` | `beacon-report` | Report directory, relative to the Cypress project. An existing `index.html` that is not a Beacon report is left in place, and so are files in `assets/` that this report did not write. |
 | `title` | `Cypress` | Header title. |
 | `history` | `.beacon-history`, 30 runs | Pass `false` to skip history. |
 | `categories` | assertion and timeout | `{ name, messageRegex?, stackRegex? }[]` matched against errors. |
@@ -82,4 +82,4 @@ The report is the Beacon UI plus an `attachments/` folder. `open` serves that fo
 | `editorLinks` | off | Record the project root so the report can open source files. |
 | `watch` | off | Rewrite the report after each spec while the run is still going. |
 
-An example spec is in [`examples/`](https://github.com/pradapjackie/beacon-cypress/tree/main/examples) on GitHub and in the `examples/` folder of the published package. `@cypress/grep` tags live on the test config, which Cypress does not include in `after:run`, so only tags written in the title (or a `tags` array on the test result) show on the report. Named `cy.screenshot('checkout-page')` images are recorded when the collector is on. A project's own `Cypress.Screenshot.defaults({ onAfterScreenshot })` still runs. `toCypressReport` builds the report data. The 0.1 name `toBeaconFixture` was removed in 0.2.0. See [CHANGELOG.md](./CHANGELOG.md). `scrub` flags always match every occurrence, so `flags: 'i'` still redacts the whole string.
+An example spec is in [`examples/`](https://github.com/pradapjackie/beacon-cypress/tree/main/examples) on GitHub and in the `examples/` folder of the published package. `@cypress/grep` tags live on the test config, which Cypress does not include in `after:run`, so only tags written in the title (or a `tags` array on the test result) show on the report. `owner:`, `severity:`, `requirement:`, `budget:`, and `issue:` match inside a title or on a tag (`pays owner:alice`, `@owner:alice`, or `tags: ['owner: alice']`). Named `cy.screenshot('checkout-page')` images are recorded when the collector is on. A project's own `Cypress.Screenshot.defaults({ onAfterScreenshot })` still runs. `toCypressReport` builds the report data. The 0.1 name `toBeaconFixture` was removed in 0.2.0. See [CHANGELOG.md](./CHANGELOG.md). `scrub` flags always match every occurrence, so `flags: 'i'` still redacts the whole string.

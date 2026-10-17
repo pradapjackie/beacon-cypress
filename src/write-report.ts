@@ -69,8 +69,6 @@ export async function writeBeaconReport(
     errors: results.message ? [{ message: scrub.apply(results.message) }] : [],
     config: {
       rootDir: options.editorLinks ? projectRoot : undefined,
-      workers: 1,
-      fullyParallel: false,
       projects: [{ name: projectName, testDir: 'cypress/e2e' }],
     },
     copyUi: true,
@@ -103,19 +101,25 @@ export async function writeBeaconReport(
 }
 
 async function clearPreviousAttachments(outputDir: string): Promise<void> {
-  let listed: unknown;
-  try {
-    listed = JSON.parse(await readFile(path.join(outputDir, 'data', 'owned.json'), 'utf8'));
-  } catch {
-    return;
+  const listed: string[] = [];
+  for (const file of ['data/owned.json', 'data/report.json']) {
+    try {
+      const parsed = JSON.parse(await readFile(path.join(outputDir, file), 'utf8')) as {
+        ownedAttachments?: unknown;
+      };
+      const entries = Array.isArray(parsed) ? parsed : parsed.ownedAttachments;
+      if (Array.isArray(entries)) {
+        for (const entry of entries) if (typeof entry === 'string') listed.push(entry);
+      }
+    } catch {
+      // No earlier manifest.
+    }
   }
-  if (!Array.isArray(listed)) return;
   const root = path.resolve(outputDir, 'attachments');
   for (const entry of listed) {
-    if (typeof entry !== 'string' || !entry.startsWith('attachments/') || entry.includes('..')) continue;
+    if (!entry.startsWith('attachments/') || entry.includes('..')) continue;
     const target = path.resolve(outputDir, entry);
-    if (target !== root && !target.startsWith(`${root}${path.sep}`)) continue;
-    await rm(target, { force: true });
+    if (target !== root && target.startsWith(`${root}${path.sep}`)) await rm(target, { force: true });
   }
 }
 

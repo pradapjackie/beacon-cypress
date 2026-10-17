@@ -1,5 +1,6 @@
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { readManifest } from './read-report';
 import { jsonForScript } from './script-json';
 
 /**
@@ -65,9 +66,20 @@ export async function exportSingleFile(
   options: ExportOptions = {},
 ): Promise<{ bytes: number; inlinedAttachments: number }> {
   const budget = options.inlineBudget ?? 10 * 1024 * 1024;
+  const manifestSource = await readManifest(reportDir);
 
-  // 1. The SPA bundle, from the report's own index.html.
-  const indexHtml = await readFile(path.join(reportDir, 'index.html'), 'utf8');
+  // 1. The SPA bundle. A foreign index.html means the report is beacon.html.
+  let indexHtml = '';
+  try {
+    indexHtml = await readFile(path.join(reportDir, 'index.html'), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const beaconPage =
+    indexHtml.includes('beacon-cypress-report') ||
+    indexHtml.includes('window.__BEACON__') ||
+    indexHtml.includes('window.__REPORT__');
+  if (!beaconPage) indexHtml = await readFile(path.join(reportDir, 'beacon.html'), 'utf8');
   const jsName = indexHtml.match(/assets\/index-[\w-]+\.js/)?.[0];
   const cssName = indexHtml.match(/assets\/index-[\w-]+\.css/)?.[0];
   if (!jsName || !cssName) {
@@ -95,7 +107,7 @@ export async function exportSingleFile(
 
   // 2. Data chunks (optionally filtered to failures).
   const dataDir = path.join(reportDir, 'data');
-  const manifest = parseChunk(await readFile(path.join(dataDir, 'manifest.js'), 'utf8')) as {
+  const manifest = parseChunk(manifestSource) as {
     chunks: { index: number; details: number };
     [k: string]: unknown;
   };

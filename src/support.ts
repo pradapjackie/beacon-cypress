@@ -47,6 +47,7 @@ declare const cy: {
 };
 
 const MAX_COMMAND_CHARS = 4_000;
+const COLLECTOR_MARK = '__beaconCypressCollector';
 
 export function collectorEnabled(value: unknown): boolean {
   return value === true || value === 'true';
@@ -70,8 +71,19 @@ export function commandFromLog(log: CypressLog, fallbackId: string): BufferedCom
 }
 
 export function installBeaconCollector(): void {
-  const flag = typeof Cypress.env === 'function' ? Cypress.env('BEACON_COLLECTOR') : undefined;
+  const host = globalThis as {
+    Cypress?: typeof Cypress;
+    afterEach?: typeof afterEach;
+    after?: typeof after;
+    cy?: typeof cy;
+    [COLLECTOR_MARK]?: boolean;
+  };
+  const cypress = host.Cypress;
+  if (!cypress) return;
+  const flag = typeof cypress.env === 'function' ? cypress.env('BEACON_COLLECTOR') : undefined;
   if (!collectorEnabled(flag)) return;
+  if (host[COLLECTOR_MARK]) return;
+  host[COLLECTOR_MARK] = true;
 
   const buffer: BufferedCommand[] = [];
   const shots: Array<{ path: string; name?: string }> = [];
@@ -96,10 +108,10 @@ export function installBeaconCollector(): void {
     buffer.push(command);
   };
 
-  Cypress.on('log:added', remember);
-  Cypress.on('log:changed', remember);
-  if (Cypress.Screenshot?.defaults) {
-    chainScreenshotDefaults(Cypress.Screenshot, (props) => {
+  cypress.on('log:added', remember);
+  cypress.on('log:changed', remember);
+  if (cypress.Screenshot?.defaults) {
+    chainScreenshotDefaults(cypress.Screenshot, (props) => {
       if (props?.path) shots.push({ path: props.path, name: props.name });
     });
   }
@@ -115,24 +127,24 @@ export function installBeaconCollector(): void {
       state,
       startedAt,
     }));
-    return cy.task(
+    return host.cy?.task(
       'beacon:commands',
       { key, attempt, append, commands, screenshots },
       { log: false },
     );
   };
 
-  afterEach(function sendCommands() {
+  host.afterEach?.(function sendCommands(this: { currentTest?: { titlePath: () => string[] } }) {
     const titles = (this.currentTest?.titlePath?.() ?? []).filter(Boolean);
-    const retry = Cypress.currentRetry ?? 0;
-    lastKey = keyForAttempt(seen, Cypress.spec.relative, titles, retry);
+    const retry = cypress.currentRetry ?? 0;
+    lastKey = keyForAttempt(seen, cypress.spec.relative, titles, retry);
     lastAttempt = retry;
     return send(lastKey, lastAttempt, false);
   });
 
   // `after` hooks run in reverse registration order, so this support-file
   // hook runs after the spec's after() and can flush those commands.
-  after(() => {
+  host.after?.(() => {
     if (!shouldFlushAfter(lastKey, buffer.length, shots.length)) return;
     return send(lastKey, lastAttempt, true);
   });
@@ -163,8 +175,8 @@ export function chainScreenshotDefaults(
     return userHook?.(el, props);
   };
   const wrapped: ScreenshotApi['defaults'] & { beacon?: boolean } = (options) => {
-    if (options && typeof options.onAfterScreenshot === 'function' && options.onAfterScreenshot !== chained) {
-      userHook = options.onAfterScreenshot;
+    if (options && 'onAfterScreenshot' in options && options.onAfterScreenshot !== chained) {
+      userHook = typeof options.onAfterScreenshot === 'function' ? options.onAfterScreenshot : undefined;
       return original({ ...options, onAfterScreenshot: chained });
     }
     return original(options);

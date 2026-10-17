@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.1
+
+- Regenerating a report deletes only the UI files Beacon wrote. An `assets/` folder that already belongs to the project is left in place.
+- `owner:`, `severity:`, `requirement:`, `budget:`, and `issue:` match inside a title and on a tag, including `@owner:alice` and `owner: alice`.
+- The Cypress report no longer shows Playwright workers, `fullyParallel`, worker lanes, or `pw:api` steps.
+- Spec locations show the file name. A placeholder line number is not appended.
+- `quarantine --fixme` suggests `it.skip()`, and `--grep-invert` prints a `@cypress/grep` skip list.
+- A test that passed on retry is counted as flaky, not as a failure.
+- `export --pdf` is no longer listed in the help. PDF export still needs `@playwright/test` when asked for directly.
+- `open` serves `beacon.html` when `index.html` belongs to the project.
+- `summarize`, `convert`, `export`, `quarantine`, `diff`, and `notify` say when a folder has no report.
+- Unknown flags such as `gate --max-failures` are rejected. The flag is `--max-failed`.
+- CTRF output names the tool `beacon-cypress`.
+- A missing video is left out of the report.
+- Clearing `onAfterScreenshot` no longer removes Beacon's screenshot hook.
+- Calling `installBeaconCollector()` twice keeps the screenshots from the first install.
+- A report folder written by 0.2.x has its old attachment files removed on the next run.
+- zod is bundled, so installing this package no longer installs zod.
+
 ## 0.3.0
 
 - A Cypress run writes the same Beacon report as beacon-reporter: dashboard cards, compare, timeline, flaky scores, trends, requirements, and the shared report commands.

@@ -12,6 +12,7 @@ export default defineConfig([
     sourcemap: true,
     shims: true,
     target: 'node20',
+    noExternal: ['zod'],
     esbuildOptions(options) {
       options.loader = { ...options.loader, '.styles': 'text', '.client': 'text' };
     },
@@ -25,6 +26,7 @@ export default defineConfig([
     clean: false,
     sourcemap: true,
     target: 'node20',
+    noExternal: ['zod'],
     external: ['@playwright/test'],
   },
 ]);

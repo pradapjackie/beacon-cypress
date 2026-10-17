@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { unknownOption } from './flags';
 import { serveReport } from './server';
 
 const HELP = `beacon-cypress — Beacon report toolkit
@@ -9,7 +10,6 @@ Usage:
   beacon-cypress open [reportDir] [--port <n>]     Serve a generated report and print the URL
   beacon-cypress export [reportDir] [--out <file>] Bundle a report into one self-contained .html
                 [--failures-only]                  (images inlined up to 10 MB; videos omitted)
-                [--pdf]                            …or print the dashboard to a PDF
   beacon-cypress gate [reportDir] [--max-failed n] Exit non-zero when thresholds are violated
               [--max-flaky n]                      (no flags = fail on any unexpected failure)
               [--min-pass-rate pct]
@@ -31,19 +31,24 @@ function fail(message: string): never {
   process.exit(1);
 }
 
+function rejectUnknown(args: string[]): void {
+  const unknown = unknownOption(args);
+  if (unknown) fail(`Unknown option ${unknown}`);
+}
+
 const [command, ...rest] = process.argv.slice(2);
 
 switch (command) {
   case 'open': {
-    const args = rest.filter((a) => !a.startsWith('--'));
-    const portFlag = rest.indexOf('--port');
-    const port = portFlag >= 0 ? Number(rest[portFlag + 1]) : 4173;
+    const args = [...rest];
+    const portFlag = args.indexOf('--port');
+    const port = portFlag >= 0 ? Number(args[portFlag + 1]) : 4173;
     if (Number.isNaN(port)) fail('Invalid --port value');
+    if (portFlag >= 0) args.splice(portFlag, 2);
+    rejectUnknown(args);
     const reportDir = path.resolve(args[0] ?? 'beacon-report');
     if (!existsSync(reportDir)) {
-      fail(
-        `Report directory not found: ${reportDir}\nRun your Playwright tests with the beacon-reporter reporter first.`,
-      );
+      fail(`Report directory not found: ${reportDir}`);
     }
     serveReport(reportDir, port);
     console.log(`Serving ${reportDir}`);
@@ -69,6 +74,7 @@ switch (command) {
       out = args[outFlag + 1] ?? out;
       args.splice(outFlag, 2);
     }
+    rejectUnknown(args);
     const reportDir = path.resolve(args[0] ?? 'beacon-report');
     if (!existsSync(reportDir)) {
       fail(`Report directory not found: ${reportDir}`);
@@ -109,6 +115,7 @@ switch (command) {
     const maxFailed = flag('--max-failed');
     const maxFlaky = flag('--max-flaky');
     const minPassRate = flag('--min-pass-rate');
+    rejectUnknown(args);
     const reportDir = path.resolve(args[0] ?? 'beacon-report');
     try {
       const { gate } = await import('./gate');
@@ -134,6 +141,7 @@ switch (command) {
       out = args[outFlag + 1];
       args.splice(outFlag, 2);
     }
+    rejectUnknown(args);
     const reportDir = path.resolve(args[0] ?? 'beacon-report');
     try {
       const wantHtml = rest.includes('--html');
@@ -168,6 +176,7 @@ switch (command) {
       out = args[outFlag + 1] ?? out;
       args.splice(outFlag, 2);
     }
+    rejectUnknown(args);
     const reportDir = path.resolve(args[0] ?? 'beacon-report');
     try {
       const { convert } = await import('./convert');
@@ -194,6 +203,7 @@ switch (command) {
     strFlag('--history');
     strFlag('--min-rate');
     const minRuns = Number(strFlag('--min-runs') ?? 3);
+    rejectUnknown(args);
     const reportDir = path.resolve(args[0] ?? 'beacon-report');
     try {
       const { quarantineCandidates, toGrepInvert } = await import('./quarantine');
@@ -209,9 +219,9 @@ switch (command) {
         console.log('No quarantine candidates — nothing flaky enough.');
       } else {
         for (const c of candidates) {
-          console.log(`${c.title} (${c.projectName}) — failing ${c.failures}/${c.runs} runs`);
+          console.log(`${c.title} (${c.projectName}) — flaky in ${c.failures}/${c.runs} runs`);
         }
-        console.log('\nUse --grep-invert to emit a title regex you can skip in Cypress.');
+        console.log(`\nSkip them with: npx cypress run --env grep="${toGrepInvert(candidates)}"`);
       }
     } catch (error) {
       fail(error instanceof Error ? error.message : String(error));
@@ -226,6 +236,7 @@ switch (command) {
       out = args[outFlag + 1];
       args.splice(outFlag, 2);
     }
+    rejectUnknown(args);
     const parentDir = args[0];
     if (!parentDir) fail('beacon archive requires a directory of reports');
     try {
@@ -250,6 +261,7 @@ switch (command) {
     const urlFlag = args.indexOf('--url');
     const reportUrl = urlFlag >= 0 ? args[urlFlag + 1] : process.env.BEACON_REPORT_URL;
     if (urlFlag >= 0) args.splice(urlFlag, 2);
+    rejectUnknown(args);
     if (format !== 'plain' && format !== 'slack' && format !== 'teams') {
       fail('beacon notify --format must be plain, slack or teams');
     }
@@ -264,6 +276,7 @@ switch (command) {
     break;
   }
   case 'diff': {
+    rejectUnknown(rest);
     const [dirA, dirB] = rest.filter((a) => !a.startsWith('--'));
     if (!dirA || !dirB) fail('beacon diff requires two report directories');
     try {
@@ -280,6 +293,7 @@ switch (command) {
     const retainFlag = args.indexOf('--retain');
     const retain = retainFlag >= 0 ? Number(args[retainFlag + 1]) : undefined;
     if (retainFlag >= 0) args.splice(retainFlag, 2);
+    rejectUnknown(args);
     const dir = path.resolve(args[0] ?? '.beacon-history');
     try {
       const { listRuns, pruneRuns, renderRuns } = await import('./history-cmd');

@@ -314,7 +314,7 @@ function statusOf(state: string): AttemptStatus {
 
 function tagsIn(title: string[], extra?: string[]): string[] {
   const withoutEmails = title.join(' ').replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, ' ');
-  const fromTitle = withoutEmails.match(/@[\w-]+/g) ?? [];
+  const fromTitle = withoutEmails.match(/@[\w-]+(?::\s*[^\s@]+)?/g) ?? [];
   const fromConfig = (extra ?? []).map((tag) => (tag.startsWith('@') ? tag : `@${tag}`));
   return [...new Set([...fromTitle, ...fromConfig])];
 }

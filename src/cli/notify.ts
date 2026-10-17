@@ -1,5 +1,4 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
+import { readManifest } from './read-report';
 import { summarize } from './summarize';
 
 export type NotifyFormat = 'plain' | 'slack' | 'teams';
@@ -13,7 +12,7 @@ interface Counts {
 }
 
 async function readCounts(reportDir: string): Promise<{ counts: Counts; title?: string }> {
-  const raw = await readFile(path.join(reportDir, 'data', 'manifest.js'), 'utf8');
+  const raw = await readManifest(reportDir);
   const manifest = JSON.parse(raw.slice(raw.indexOf(', ') + 2, raw.lastIndexOf(');'))) as {
     counts: Counts;
     ui?: { title?: string };

@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { readManifest } from './read-report';
 
 /**
  * Quarantine candidates are the same recency-weighted list the Flaky page
@@ -40,8 +41,7 @@ export async function quarantineCandidates(
   const minRuns = options.minRuns ?? 3;
   const minScore = options.minScore ?? 40;
 
-  const manifestPath = path.join(reportDir, 'data', 'manifest.js');
-  const rawManifest = await readFile(manifestPath, 'utf8');
+  const rawManifest = await readManifest(reportDir);
   const manifest = JSON.parse(
     rawManifest.slice(rawManifest.indexOf(', ') + 2, rawManifest.lastIndexOf(');')),
   ) as { aggregates?: { flakiness?: FlakyEntry[] } };
@@ -81,28 +81,25 @@ export async function quarantineCandidates(
     .sort((a, b) => b.failures / b.runs - a.failures / a.runs);
 }
 
-const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
+/** `@cypress/grep` skips a title when the pattern starts with `-`. `;` separates titles. */
 export function toGrepInvert(candidates: QuarantineCandidate[]): string {
-  const titles = [...new Set(candidates.map((c) => escapeRegex(c.title)))];
-  if (titles.length === 0) return '';
-  if (titles.length === 1) return `^${titles[0]}$`;
-  return `^(?:${titles.join('|')})$`;
+  const titles = [...new Set(candidates.map((c) => c.title.trim()).filter(Boolean))];
+  return titles.map((title) => `-${title.replace(/;/g, ' ')}`).join(';');
 }
 
-/** Suggested test.fixme edits, one block per candidate. */
+/** Suggested `it.skip()` edits, one block per candidate. */
 export function toFixmeSuggestions(candidates: QuarantineCandidate[]): string {
   const seen = new Set<string>();
   const blocks: string[] = [];
   for (const c of candidates) {
-    const key = `${c.file}:${c.line}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const where = c.file && (c.line ?? 0) > 0 ? `${c.file}:${c.line}` : (c.file ?? c.title);
+    if (seen.has(where)) continue;
+    seen.add(where);
     blocks.push(
       [
-        `// ${c.file}:${c.line} — flaky in ${c.failures}/${c.runs} recent runs`,
+        `// ${where} — flaky in ${c.failures}/${c.runs} recent runs`,
         '//   add inside the test:',
-        "//   test.fixme(true, 'quarantined: flaky — see beacon report');",
+        'it.skip();',
       ].join('\n'),
     );
   }

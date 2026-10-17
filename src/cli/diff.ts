@@ -20,7 +20,16 @@ function parseChunk<T>(source: string): T {
 async function loadReport(dir: string): Promise<Map<string, Entry>> {
   const detailsDir = path.join(dir, 'data', 'details');
   const byId = new Map<string, Entry>();
-  for (const name of (await readdir(detailsDir)).filter((f) => f.endsWith('.js'))) {
+  let names: string[];
+  try {
+    names = (await readdir(detailsDir)).filter((f) => f.endsWith('.js'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`No report found at ${dir}`);
+    }
+    throw error;
+  }
+  for (const name of names) {
     const details = parseChunk<
       Array<{
         caseId: string;

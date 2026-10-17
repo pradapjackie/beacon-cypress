@@ -596,6 +596,8 @@ describe('writeBeaconReport', () => {
     await writeFile(path.join(root, 'index.html'), '<h1>user site</h1>');
     await mkdir(path.join(root, 'attachments'), { recursive: true });
     await writeFile(path.join(root, 'attachments', 'keep.txt'), 'mine');
+    await mkdir(path.join(root, 'assets'), { recursive: true });
+    await writeFile(path.join(root, 'assets', 'logo.png'), PNG);
     const first = path.join(root, 'first.png');
     const second = path.join(root, 'second.png');
     await writeFile(first, PNG);
@@ -618,13 +620,111 @@ describe('writeBeaconReport', () => {
         { history: false, outputFolder: '.' },
       );
     await run(first);
+    const ownedPath = path.join(root, 'data', 'owned-ui.json');
+    const owned = JSON.parse(await readFile(ownedPath, 'utf8')) as string[];
+    await writeFile(path.join(root, 'assets', 'stale.js'), 'stale');
+    await writeFile(ownedPath, JSON.stringify([...owned, 'assets/stale.js']));
     await run(second);
     expect(await readFile(path.join(root, 'index.html'), 'utf8')).toBe('<h1>user site</h1>');
+    expect(await readFile(path.join(root, 'assets', 'logo.png'))).toEqual(PNG);
+    await expect(readFile(path.join(root, 'assets', 'stale.js'), 'utf8')).rejects.toThrow();
     expect(await readFile(path.join(root, 'attachments', 'keep.txt'), 'utf8')).toBe('mine');
     const page = await readFile(path.join(root, 'beacon.html'), 'utf8');
     expect(page).toContain('beacon-cypress-report');
     const names = await readdir(path.join(root, 'attachments'));
     expect(names.filter((name) => name.endsWith('.png'))).toHaveLength(1);
     expect(names).toContain('keep.txt');
+  });
+
+  it('reads annotations from titles and tags, and drops a missing video', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'beacon-cypress-'));
+    const shot = path.join(root, 'shot.png');
+    await writeFile(shot, PNG);
+    const written = await writeBeaconReport(
+      {
+        status: 'finished',
+        browserName: 'chrome',
+        runs: [
+          {
+            spec: { relative: 'cypress/e2e/ui.cy.js' },
+            video: path.join(root, 'missing.mp4'),
+            screenshots: [{ path: shot, name: 'ui.cy.js -- pays owner:alice (failed).png' }],
+            tests: [
+              {
+                title: ['pays owner:alice'],
+                state: 'failed',
+                attempts: [{ state: 'failed', error: { message: 'nope' } }],
+              },
+              {
+                title: ['pays @owner:bob'],
+                state: 'passed',
+                attempts: [{ state: 'passed' }],
+              },
+              {
+                title: ['tagged'],
+                state: 'passed',
+                tags: ['owner: alice'],
+                attempts: [{ state: 'passed' }],
+              },
+            ],
+          },
+        ],
+      },
+      new Map([
+        [
+          commandKey('cypress/e2e/ui.cy.js', ['pays owner:alice']),
+          [{ name: 'click', message: 'pay', state: 'passed' }],
+        ],
+      ]),
+      root,
+      { history: false },
+    );
+    const manifest = readChunk<{ meta: { config: Record<string, unknown> } }>(
+      await readFile(path.join(written.outputDir, 'data', 'manifest.js'), 'utf8'),
+    );
+    expect(manifest.meta.config.workers).toBeUndefined();
+    expect(manifest.meta.config.fullyParallel).toBeUndefined();
+    const details = readChunk<
+      Array<{
+        title: string;
+        tags: string[];
+        location: { file: string; line: number };
+        annotations: Array<{ type: string; description: string }>;
+        results: Array<{ steps: Array<{ category: string }>; attachments: Array<{ name: string; mode?: string }> }>;
+      }>
+    >(await readFile(path.join(written.outputDir, 'data', 'details', 'chunk-0.js'), 'utf8'));
+    const byTitle = new Map(details.map((detail) => [detail.title, detail]));
+    expect(byTitle.get('pays owner:alice')?.annotations).toEqual([{ type: 'owner', description: 'alice' }]);
+    expect(byTitle.get('pays @owner:bob')?.tags).toEqual(['@owner:bob']);
+    expect(byTitle.get('pays @owner:bob')?.annotations).toEqual([{ type: 'owner', description: 'bob' }]);
+    expect(byTitle.get('tagged')?.annotations).toEqual([{ type: 'owner', description: 'alice' }]);
+    expect(byTitle.get('pays owner:alice')?.location).toEqual({ file: 'cypress/e2e/ui.cy.js', line: 0, column: 0 });
+    expect(byTitle.get('pays owner:alice')?.results[0]?.steps[0]?.category).toBe('command');
+    const attachments = details.flatMap((detail) => detail.results.flatMap((result) => result.attachments));
+    expect(attachments.some((item) => item.name === 'video' || item.mode === 'omitted')).toBe(false);
+    expect(attachments.some((item) => item.name !== 'video')).toBe(true);
+  });
+
+  it('deletes attachment files recorded by a 0.2 report', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'beacon-cypress-'));
+    const report = path.join(root, 'report');
+    await mkdir(path.join(report, 'data'), { recursive: true });
+    await mkdir(path.join(report, 'attachments'), { recursive: true });
+    await writeFile(path.join(report, 'attachments', 'old.png'), 'old');
+    await writeFile(path.join(report, 'attachments', 'keep.txt'), 'mine');
+    await writeFile(
+      path.join(report, 'data', 'report.json'),
+      JSON.stringify({ ownedAttachments: ['attachments/old.png', '../secret.txt'] }),
+    );
+    await writeFile(path.join(root, 'secret.txt'), 'safe');
+    await writeBeaconReport(
+      { status: 'finished', runs: [{ spec: { relative: 'a.cy.js' }, tests: [] }] },
+      new Map(),
+      root,
+      { history: false, outputFolder: 'report' },
+    );
+    await expect(readFile(path.join(report, 'attachments', 'old.png'), 'utf8')).rejects.toThrow();
+    expect(await readFile(path.join(report, 'attachments', 'keep.txt'), 'utf8')).toBe('mine');
+    expect(await readFile(path.join(root, 'secret.txt'), 'utf8')).toBe('safe');
   });
 });

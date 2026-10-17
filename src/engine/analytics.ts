@@ -242,7 +242,7 @@ export function computeSlowestSteps(
       for (const child of step.steps) visit(child);
       return;
     }
-    if (step.category !== 'pw:api' && step.category !== 'expect') return;
+    if (step.category !== 'pw:api' && step.category !== 'expect' && step.category !== 'command') return;
     const title = normalizeStepTitle(step.title);
     if (!title) return;
     const key = `${step.category}\u0000${title}`;

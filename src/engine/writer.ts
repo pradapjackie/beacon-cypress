@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -632,8 +632,8 @@ function snapshotConfig(config: BeaconRunConfig): Record<string, unknown> {
       }))
     : undefined;
   return {
-    workers: config.workers,
-    fullyParallel: config.fullyParallel,
+    ...(config.workers != null ? { workers: config.workers } : {}),
+    ...(config.fullyParallel != null ? { fullyParallel: config.fullyParallel } : {}),
     forbidOnly: config.forbidOnly,
     globalTimeout: config.globalTimeout || undefined,
     maxFailures: config.maxFailures || undefined,
@@ -773,10 +773,7 @@ async function copyUi(
   options: { clean: boolean } = { clean: true },
 ): Promise<void> {
   const uiDir = reportUiDir();
-  if (existsSync(uiDir) && options.clean) {
-    // Old hashed bundles would otherwise accumulate across regenerations.
-    await rm(path.join(outputDir, 'assets'), { recursive: true, force: true });
-  }
+  if (existsSync(uiDir) && options.clean) await clearOwnedUi(outputDir);
   if (!existsSync(uiDir)) {
     console.warn(
       '[beacon] Prebuilt UI not found next to the reporter build — the report has data files only. ' +
@@ -791,11 +788,31 @@ async function copyUi(
     if (!isBeaconPage(current)) foreign = current;
   }
   await cp(uiDir, outputDir, { recursive: true });
+  const ownedUi = (await readdir(path.join(uiDir, 'assets'))).map((name) => `assets/${name}`);
+  await mkdir(path.join(outputDir, 'data'), { recursive: true });
+  await writeFile(path.join(outputDir, 'data', 'owned-ui.json'), `${JSON.stringify(ownedUi)}\n`);
   if (foreign) {
     const report = await readFile(indexPath, 'utf8');
     await writeFile(indexPath, foreign);
     await writeFile(path.join(outputDir, 'beacon.html'), report);
     console.warn(`[beacon] Left ${indexPath} in place and wrote ${path.join(outputDir, 'beacon.html')}.`);
+  }
+}
+
+/** Deletes UI files this package wrote. A project's own `assets/` files stay. */
+async function clearOwnedUi(outputDir: string): Promise<void> {
+  let listed: unknown;
+  try {
+    listed = JSON.parse(await readFile(path.join(outputDir, 'data', 'owned-ui.json'), 'utf8'));
+  } catch {
+    return;
+  }
+  if (!Array.isArray(listed)) return;
+  const assetsRoot = path.resolve(outputDir, 'assets');
+  for (const entry of listed) {
+    if (typeof entry !== 'string' || !entry.startsWith('assets/') || entry.includes('..')) continue;
+    const target = path.resolve(outputDir, entry);
+    if (target !== assetsRoot && target.startsWith(`${assetsRoot}${path.sep}`)) await rm(target, { force: true });
   }
 }
 

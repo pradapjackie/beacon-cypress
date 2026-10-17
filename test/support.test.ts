@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { chainScreenshotDefaults, collectorEnabled, commandFromLog, shouldFlushAfter } from '../src/support';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  chainScreenshotDefaults,
+  collectorEnabled,
+  commandFromLog,
+  installBeaconCollector,
+  shouldFlushAfter,
+} from '../src/support';
 
 describe('commandFromLog', () => {
   it('reads a Cypress log object through get()', () => {
@@ -47,7 +53,7 @@ describe('screenshot hooks', () => {
         if (options == null || typeof options !== 'object') {
           throw new Error('`Cypress.Screenshot.defaults()` must be called with an object. You passed: ``');
         }
-        if (typeof options.onAfterScreenshot === 'function') hook = options.onAfterScreenshot;
+        if ('onAfterScreenshot' in options) hook = options.onAfterScreenshot;
         return { onAfterScreenshot: hook };
       },
     };
@@ -70,6 +76,58 @@ describe('screenshot hooks', () => {
     expect(recorded).toEqual(['/first.png', '/second.png']);
     expect(seen).toEqual(['before:/first.png', 'after:/second.png']);
     expect(() => screenshot.defaults()).toThrow(/must be called with an object/);
+  });
+
+  it('keeps recording when a later defaults call clears the user hook', () => {
+    const screenshot = fakeScreenshot();
+    const recorded: string[] = [];
+    chainScreenshotDefaults(screenshot, (props) => {
+      if (props.path) recorded.push(props.path);
+    });
+    screenshot.defaults({ onAfterScreenshot: undefined });
+    screenshot.defaults({}).onAfterScreenshot?.(null, { path: '/still.png' });
+    expect(recorded).toEqual(['/still.png']);
+  });
+
+  it('does not replace a collector that is already installed', () => {
+    const screenshot = fakeScreenshot();
+    const recorded: string[] = [];
+    chainScreenshotDefaults(screenshot, (props) => {
+      if (props.path) recorded.push(`first:${props.path}`);
+    });
+    chainScreenshotDefaults(screenshot, (props) => {
+      if (props.path) recorded.push(`second:${props.path}`);
+    });
+    screenshot.defaults({}).onAfterScreenshot?.(null, { path: '/named.png' });
+    expect(recorded).toEqual(['first:/named.png']);
+  });
+});
+
+describe('installBeaconCollector', () => {
+  it('registers its hooks once', () => {
+    delete (globalThis as { __beaconCypressCollector?: boolean }).__beaconCypressCollector;
+    const afterEachHooks: unknown[] = [];
+    vi.stubGlobal('afterEach', (fn: unknown) => afterEachHooks.push(fn));
+    vi.stubGlobal('after', () => {});
+    vi.stubGlobal('cy', { task: () => {} });
+    vi.stubGlobal('Cypress', {
+      env: () => true,
+      spec: { relative: 'a.cy.js' },
+      currentRetry: 0,
+      on: () => {},
+      Screenshot: {
+        defaults(options?: { onAfterScreenshot?: (el: unknown, props: { path?: string }) => unknown }) {
+          return { onAfterScreenshot: options?.onAfterScreenshot };
+        },
+      },
+    });
+    try {
+      installBeaconCollector();
+      installBeaconCollector();
+      expect(afterEachHooks).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

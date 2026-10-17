@@ -1,5 +1,6 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { readManifest } from './read-report';
 
 /** Interop exports: JUnit XML, CTRF JSON, and CSV from a generated report. */
 
@@ -30,7 +31,7 @@ async function load(reportDir: string) {
   const manifest = parseChunk<{
     meta: { startTime: number; duration: number };
     counts: { total: number; expected: number; unexpected: number; flaky: number; skipped: number };
-  }>(await readFile(path.join(dataDir, 'manifest.js'), 'utf8'));
+  }>(await readManifest(reportDir));
   const details: Detail[] = [];
   for (const name of (await readdir(path.join(dataDir, 'details'))).filter((f) =>
     f.endsWith('.js'),
@@ -83,7 +84,7 @@ function toCtrf(details: Detail[], meta: { startTime: number; duration: number }
   return `${JSON.stringify(
     {
       results: {
-        tool: { name: 'beacon-reporter' },
+        tool: { name: 'beacon-cypress' },
         summary: {
           tests: details.length,
           passed: details.filter((d) => d.outcome === 'expected' || d.outcome === 'flaky').length,
@@ -125,7 +126,7 @@ function toCsv(details: Detail[]): string {
       d.title,
       d.projectName,
       d.location.file,
-      d.location.line,
+      d.location.line > 0 ? d.location.line : '',
       d.outcome,
       d.results[d.results.length - 1]?.status ?? '',
       d.results.reduce((s, r) => s + r.duration, 0),

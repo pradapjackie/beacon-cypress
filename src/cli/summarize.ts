@@ -1,5 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { readManifest } from './read-report';
+import { specAt } from './spec-at';
 
 /**
  * AI/PR summary mode (adopted from Allure 3's agent mode): a Markdown digest
@@ -34,7 +36,7 @@ export async function summarize(reportDir: string): Promise<string> {
       incidents?: Array<{ message: string; tests: Array<{ title: string }> }>;
       slowedDown?: Array<{ title: string; projectName: string; factor: number }>;
     };
-  }>(await readFile(path.join(dataDir, 'manifest.js'), 'utf8'));
+  }>(await readManifest(reportDir));
 
   let history:
     | {
@@ -94,7 +96,7 @@ export async function summarize(reportDir: string): Promise<string> {
         .split('\n')[0];
       lines.push('');
       lines.push(
-        `- **${test.title}** (${test.projectName}) — \`${test.location.file}:${test.location.line}\`${test.category ? ` · ${test.category}` : ''}${test.failingStreak ? ` · failing ${test.failingStreak} runs` : ''}`,
+        `- **${test.title}** (${test.projectName}) — \`${specAt(test.location.file, test.location.line)}\`${test.category ? ` · ${test.category}` : ''}${test.failingStreak ? ` · failing ${test.failingStreak} runs` : ''}`,
       );
       if (error) lines.push(`  - \`${error}\``);
       lines.push(

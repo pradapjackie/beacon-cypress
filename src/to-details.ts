@@ -39,6 +39,7 @@ export async function toTestDetails(
           contentType: contentType(shot.path, 'image/png'),
           path: shot.path,
         });
+        if (ref.mode === 'omitted') continue;
         remember(owned, ref);
         attachments.push(ref);
       }
@@ -48,8 +49,10 @@ export async function toTestDetails(
           contentType: contentType(attempt.video.path, 'video/mp4'),
           path: attempt.video.path,
         });
-        remember(owned, ref);
-        attachments.push(ref);
+        if (ref.mode !== 'omitted') {
+          remember(owned, ref);
+          attachments.push(ref);
+        }
       }
       results.push({
         retry: index,
@@ -77,7 +80,7 @@ export async function toTestDetails(
       caseId: computeCaseId(projectName, file, titlePath),
       title: test.title,
       titlePath,
-      location: { file, line: 1, column: 1 },
+      location: { file, line: 0, column: 0 },
       projectName,
       tags: test.tags,
       annotations,
@@ -95,20 +98,28 @@ function remember(owned: string[], ref: { mode: string; sha256?: string; ext?: s
   if (ref.mode === 'stored' && ref.sha256) owned.push(`attachments/${ref.sha256}.${ref.ext ?? 'bin'}`);
 }
 
-function annotationsOf(test: ReportTest): Annotation[] {
+const ANNOTATION = /(?:^|[\s@])(owner|severity|requirement|budget|issue)\s*[:=]\s*(\S+)/gi;
+
+/** `owner:` / `severity:` / … anywhere in a title, or on a tag with or without `@`. */
+export function annotationsIn(texts: string[]): Annotation[] {
   const notes: Annotation[] = [];
   const seen = new Set<string>();
-  for (const raw of [...test.tags, ...test.titlePath]) {
-    const match = /^(owner|severity|requirement|budget|issue)\s*[:=]\s*(.+)$/i.exec(raw.trim());
-    if (!match) continue;
-    const type = match[1].toLowerCase();
-    const description = match[2].trim();
-    const key = `${type}\u0000${description}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    notes.push({ type, description });
+  for (const raw of texts) {
+    const source = raw.trim().replace(/^@/, '');
+    for (const match of source.matchAll(ANNOTATION)) {
+      const type = match[1].toLowerCase();
+      const description = match[2].trim();
+      const key = `${type}\u0000${description}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      notes.push({ type, description });
+    }
   }
   return notes;
+}
+
+function annotationsOf(test: ReportTest): Annotation[] {
+  return annotationsIn([...test.titlePath, ...test.tags.map((tag) => tag.replace(/^@/, ''))]);
 }
 
 function statusOf(attempt: ReportAttempt): TestStatus {
@@ -124,7 +135,7 @@ function stepsOf(attempt: ReportAttempt): TestResultRecord['steps'] {
     const failed = command.state === 'failed';
     const step = {
       title: command.title,
-      category: command.title.startsWith('assert') ? 'expect' : 'pw:api',
+      category: command.title.startsWith('assert') ? 'expect' : 'command',
       startTime: cursor,
       duration: command.duration,
       attachments: [] as number[],
