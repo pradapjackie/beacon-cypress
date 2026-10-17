@@ -510,6 +510,23 @@ describe('writeBeaconReport', () => {
     expect(html).toContain('attachments/');
     expect(html).not.toContain('playwright');
     expect(html).not.toContain('beacon-reporter');
+    expect(html).not.toContain('fonts.googleapis');
+    expect(html).toContain('beacon-cypress-report');
+    const saved = JSON.parse(await readFile(path.join(written.outputDir, 'data', 'report.json'), 'utf8')) as {
+      history: Array<{ at: string }>;
+    };
+    expect(saved.history).toEqual([]);
+  });
+
+  it('stamps history with the Cypress run start', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'beacon-cypress-'));
+    const written = await writeBeaconReport(results(path.join(root, 'missing.png'), path.join(root, 'missing.mp4')), new Map(), root, {
+      history: { dir: 'history' },
+    });
+    const report = JSON.parse(await readFile(path.join(written.outputDir, 'data', 'report.json'), 'utf8')) as {
+      history: Array<{ at: string }>;
+    };
+    expect(report.history[0]?.at).toBe('2026-10-16T12:00:00.000Z');
   });
 
   it('still writes a report when scrub is not an array, and drops stale attachments', async () => {
@@ -569,5 +586,42 @@ describe('writeBeaconReport', () => {
       { history: false, outputFolder: 'report' },
     );
     expect(await readFile(path.join(report, 'attachments', 'keep.txt'), 'utf8')).toBe('mine');
+  });
+
+  it('does not replace a project index.html or delete its attachments when the report folder is the project root', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'beacon-cypress-'));
+    await writeFile(path.join(root, 'index.html'), '<h1>user site</h1>');
+    await mkdir(path.join(root, 'attachments'), { recursive: true });
+    await writeFile(path.join(root, 'attachments', 'keep.txt'), 'mine');
+    const first = path.join(root, 'first.png');
+    const second = path.join(root, 'second.png');
+    await writeFile(first, PNG);
+    await writeFile(second, Buffer.from('different-png'));
+    const run = (shot: string) =>
+      writeBeaconReport(
+        {
+          status: 'finished',
+          startedTestsAt: '2026-10-16T12:00:00.000Z',
+          runs: [
+            {
+              spec: { relative: 'a.cy.js' },
+              screenshots: [{ path: shot, name: 'a.cy.js -- keeps one (failed).png' }],
+              tests: [{ title: ['keeps one'], state: 'failed', attempts: [{ state: 'failed' }] }],
+            },
+          ],
+        },
+        new Map(),
+        root,
+        { history: false, outputFolder: '.' },
+      );
+    await run(first);
+    await run(second);
+    expect(await readFile(path.join(root, 'index.html'), 'utf8')).toBe('<h1>user site</h1>');
+    expect(await readFile(path.join(root, 'attachments', 'keep.txt'), 'utf8')).toBe('mine');
+    const page = await readFile(path.join(root, 'beacon.html'), 'utf8');
+    expect(page).toContain('beacon-cypress-report');
+    const names = await readdir(path.join(root, 'attachments'));
+    expect(names.filter((name) => name.endsWith('.png'))).toHaveLength(1);
+    expect(names).toContain('keep.txt');
   });
 });

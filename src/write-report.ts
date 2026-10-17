@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   toCypressReport,
@@ -58,13 +58,13 @@ export async function writeBeaconReport(
   await clearPreviousAttachments(outputDir);
 
   const mapped = toCypressReport(results, commands, scrub.apply, recordedShots);
-  await localizeFiles(outputDir, mapped.tests);
+  const ownedAttachments = await localizeFiles(outputDir, mapped.tests);
   categorize(mapped.tests, options.categories ?? DEFAULT_CATEGORIES);
 
   const counts = countTests(mapped.tests);
   const history = await remember(projectRoot, options, {
     kind: 'cypress',
-    at: new Date().toISOString(),
+    at: new Date(mapped.startedAt || Date.now()).toISOString(),
     status: mapped.status,
     duration: mapped.duration,
     counts,
@@ -94,26 +94,61 @@ export async function writeBeaconReport(
     counts,
     tests: mapped.tests,
     history,
+    ownedAttachments,
   };
 
   await mkdir(path.join(outputDir, 'data'), { recursive: true });
   await writeFile(path.join(outputDir, 'data', 'report.json'), JSON.stringify(report));
-  await writeFile(path.join(outputDir, 'index.html'), renderReportHtml(report));
+  await writeFile(await reportPage(outputDir), renderReportHtml(report));
   return { outputDir, tests: mapped.tests.length };
 }
 
-/** Only a previous Cypress Beacon report owns `attachments/`. A plain folder with that name is left alone. */
+/** Delete only files this report wrote. A project `attachments/` folder stays. */
 async function clearPreviousAttachments(outputDir: string): Promise<void> {
+  let owned: unknown;
   try {
-    await access(path.join(outputDir, 'data', 'report.json'));
+    const previous = JSON.parse(await readFile(path.join(outputDir, 'data', 'report.json'), 'utf8')) as {
+      ownedAttachments?: unknown;
+    };
+    owned = previous.ownedAttachments;
   } catch {
     return;
   }
-  await rm(path.join(outputDir, 'attachments'), { recursive: true, force: true });
+  if (!Array.isArray(owned)) return;
+  for (const rel of owned) {
+    const file = ownedAttachmentPath(outputDir, rel);
+    if (file) await rm(file, { force: true });
+  }
 }
 
-async function localizeFiles(outputDir: string, tests: ReportTest[]): Promise<void> {
+function ownedAttachmentPath(outputDir: string, rel: unknown): string | undefined {
+  if (typeof rel !== 'string' || !rel.startsWith('attachments/') || rel.includes('..')) return undefined;
+  const root = path.resolve(outputDir, 'attachments');
+  const file = path.resolve(outputDir, rel);
+  if (file !== root && !file.startsWith(root + path.sep)) return undefined;
+  return file;
+}
+
+/**
+ * A project that points the report at its root may already have an `index.html`.
+ * Replace only a Beacon report. Anything else stays, and this run writes `beacon.html`.
+ */
+async function reportPage(outputDir: string): Promise<string> {
+  const indexPath = path.join(outputDir, 'index.html');
+  try {
+    const existing = await readFile(indexPath, 'utf8');
+    if (existing.includes('beacon-cypress-report') || existing.includes('window.__REPORT__')) return indexPath;
+  } catch {
+    return indexPath;
+  }
+  const alternate = path.join(outputDir, 'beacon.html');
+  console.warn(`[beacon] Left ${indexPath} in place and wrote ${alternate}.`);
+  return alternate;
+}
+
+async function localizeFiles(outputDir: string, tests: ReportTest[]): Promise<string[]> {
   const cache = new Map<string, string | undefined>();
+  const owned: string[] = [];
   const local = async (file: string): Promise<string | undefined> => {
     if (cache.has(file)) return cache.get(file);
     let rel: string | undefined;
@@ -124,6 +159,7 @@ async function localizeFiles(outputDir: string, tests: ReportTest[]): Promise<vo
       rel = `attachments/${name}`;
       await mkdir(path.join(outputDir, 'attachments'), { recursive: true });
       await writeFile(path.join(outputDir, 'attachments', name), bytes);
+      owned.push(rel);
     } catch {
       rel = undefined;
     }
@@ -145,6 +181,7 @@ async function localizeFiles(outputDir: string, tests: ReportTest[]): Promise<vo
       }
     }
   }
+  return [...new Set(owned)];
 }
 
 function categorize(

@@ -31,9 +31,11 @@ declare const Cypress: {
   env(key: string): unknown;
   on(event: 'log:added' | 'log:changed', fn: (log: CypressLog) => void): void;
   Screenshot?: {
-    defaults(options: {
-      onAfterScreenshot?: (el: unknown, props: { path?: string; name?: string }) => void;
-    }): void;
+    defaults(options?: {
+      onAfterScreenshot?: (el: unknown, props: { path?: string; name?: string }) => unknown;
+    }): {
+      onAfterScreenshot?: (el: unknown, props: { path?: string; name?: string }) => unknown;
+    };
   };
 };
 
@@ -96,11 +98,11 @@ export function installBeaconCollector(): void {
 
   Cypress.on('log:added', remember);
   Cypress.on('log:changed', remember);
-  Cypress.Screenshot?.defaults({
-    onAfterScreenshot(_el, props) {
+  if (Cypress.Screenshot?.defaults) {
+    chainScreenshotDefaults(Cypress.Screenshot, (props) => {
       if (props?.path) shots.push({ path: props.path, name: props.name });
-    },
-  });
+    });
+  }
 
   const send = (key: string, attempt: number, append: boolean) => {
     const snapshot = buffer.splice(0, buffer.length);
@@ -131,9 +133,50 @@ export function installBeaconCollector(): void {
   // `after` hooks run in reverse registration order, so this support-file
   // hook runs after the spec's after() and can flush those commands.
   after(() => {
-    if (!lastKey || buffer.length === 0) return;
+    if (!shouldFlushAfter(lastKey, buffer.length, shots.length)) return;
     return send(lastKey, lastAttempt, true);
   });
+}
+
+type ScreenshotHook = (el: unknown, props: { path?: string; name?: string }) => unknown;
+
+type ScreenshotApi = {
+  defaults(options?: { onAfterScreenshot?: ScreenshotHook }): { onAfterScreenshot?: ScreenshotHook };
+};
+
+/**
+ * Keep a project hook that was registered before this collector, and keep
+ * recording if a later `Cypress.Screenshot.defaults({ onAfterScreenshot })`
+ * replaces the callback.
+ */
+export function chainScreenshotDefaults(
+  screenshot: ScreenshotApi,
+  record: (props: { path?: string; name?: string }) => void,
+): void {
+  const currentDefaults = screenshot.defaults as ScreenshotApi['defaults'] & { beacon?: boolean };
+  if (currentDefaults.beacon) return;
+  const original = screenshot.defaults.bind(screenshot);
+  // Cypress rejects `defaults()` with no argument. An empty object returns the current hook.
+  let userHook = original({}).onAfterScreenshot;
+  const chained: ScreenshotHook = (el, props) => {
+    record(props);
+    return userHook?.(el, props);
+  };
+  const wrapped: ScreenshotApi['defaults'] & { beacon?: boolean } = (options) => {
+    if (options && typeof options.onAfterScreenshot === 'function' && options.onAfterScreenshot !== chained) {
+      userHook = options.onAfterScreenshot;
+      return original({ ...options, onAfterScreenshot: chained });
+    }
+    return original(options);
+  };
+  wrapped.beacon = true;
+  screenshot.defaults = wrapped;
+  original({ onAfterScreenshot: chained });
+}
+
+/** An `after()` hook can take a `{ log: false }` screenshot and log no command. */
+export function shouldFlushAfter(lastKey: string, commandCount: number, shotCount: number): boolean {
+  return Boolean(lastKey) && !(commandCount === 0 && shotCount === 0);
 }
 
 function readLog(log: CypressLog, key: string): unknown {

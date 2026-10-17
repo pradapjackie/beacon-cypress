@@ -69,11 +69,11 @@ The report is a single `index.html` plus an `attachments/` folder. `open` serves
 
 | Option | Default | |
 |---|---|---|
-| `outputFolder` | `beacon-report` | Report directory, relative to the Cypress project. |
+| `outputFolder` | `beacon-report` | Report directory, relative to the Cypress project. An existing `index.html` that is not a Beacon report is left in place. |
 | `title` | `Cypress` | Header title. |
 | `history` | `.beacon-history`, 30 runs | Pass `false` to skip history. |
 | `categories` | assertion and timeout | `{ name, messageRegex?, stackRegex? }[]` matched against errors. |
 | `scrub` | — | Array of `{ pattern, flags?, replacement? }`. Applied to errors, command steps, and text attachments. |
 | `environment` | browser, Cypress version, OS | Extra key-values on the environment card. |
 
-An example spec is in [`examples/`](https://github.com/pradapjackie/beacon-cypress/tree/main/examples) on GitHub and in the `examples/` folder of the published package. `@cypress/grep` tags live on the test config, which Cypress does not include in `after:run`, so only tags written in the title (or a `tags` array on the test result) show on the report. Named `cy.screenshot('checkout-page')` images are recorded when the collector is on. `scrub` flags always match every occurrence, so `flags: 'i'` still redacts the whole string.
+An example spec is in [`examples/`](https://github.com/pradapjackie/beacon-cypress/tree/main/examples) on GitHub and in the `examples/` folder of the published package. `@cypress/grep` tags live on the test config, which Cypress does not include in `after:run`, so only tags written in the title (or a `tags` array on the test result) show on the report. Named `cy.screenshot('checkout-page')` images are recorded when the collector is on. A project's own `Cypress.Screenshot.defaults({ onAfterScreenshot })` still runs. `toCypressReport` builds the report data. The 0.1 name `toBeaconFixture` was removed in 0.2.0. See [CHANGELOG.md](./CHANGELOG.md). `scrub` flags always match every occurrence, so `flags: 'i'` still redacts the whole string.
